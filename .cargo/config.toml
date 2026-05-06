@@ -1,0 +1,46 @@
+# No default [build] target here — aspeed-data is a host binary and must not
+# inherit the embedded target. Always pass --target thumbv7m-none-eabi
+# explicitly for aspeed-pac and embassy-aspeed, or use `just build-*`.
+
+# ── AST2600 SSP (ARM Cortex-M3) ──────────────────────────────────────────────
+[target.thumbv7m-none-eabi]
+# Custom probe-rs chip description (Task 19). Fallback: J-Link Commander.
+runner = "probe-rs run --chip-description-path probe-rs-targets/AST2600_SSP.yaml"
+
+rustflags = [
+    # embassy-aspeed/build.rs emits the memory-region linker script.
+    # cortex-m-rt's link.x must also be on the search path (provided by cortex-m-rt).
+    "-C", "link-arg=-Tlink.x",
+    # defmt symbol table (required when defmt feature is enabled).
+    "-C", "link-arg=-Tdefmt.x",
+    # Disable PT_GNU_EH_FRAME (saves ~2 KB; cortex-m-rt documents this).
+    "-C", "link-arg=--nmagic",
+]
+
+# ── AST2700 SSP (ARM Cortex-M4F, future) ─────────────────────────────────────
+[target.thumbv7em-none-eabihf]
+runner = "probe-rs run --chip-description-path probe-rs-targets/AST2700_SSP.yaml"
+
+rustflags = [
+    "-C", "link-arg=-Tlink.x",
+    "-C", "link-arg=-Tdefmt.x",
+    "-C", "link-arg=--nmagic",
+]
+
+# ── AST2700 BootMCU (RISC-V ibex RV32IMC) ────────────────────────────────────
+# riscv-rt provides link.x automatically via its build.rs.
+# memory.x is supplied by embassy-aspeed's build.rs (copied from link/).
+[target.riscv32imc-unknown-none-elf]
+runner = "false"   # no on-target runner yet; use: cargo build then flash manually
+
+rustflags = [
+    # memory.x must come BEFORE link.x (riscv-rt 0.12 does not INCLUDE it).
+    # The file is written to OUT_DIR by embassy-aspeed/build.rs.
+    "-C", "link-arg=-Tmemory.x",
+    # riscv-rt provides link.x in its own OUT_DIR.
+    "-C", "link-arg=-Tlink.x",
+    # defmt symbol table — provides _defmt_timestamp / _defmt_panic defaults.
+    "-C", "link-arg=-Tdefmt.x",
+    # Disable PT_GNU_EH_FRAME section (saves space, not needed for no_std).
+    "-C", "link-arg=--nmagic",
+]

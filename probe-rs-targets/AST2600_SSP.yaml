@@ -1,0 +1,54 @@
+# probe-rs chip description for ASPEED AST2600 SSP (ARM Cortex-M3 coprocessor).
+#
+# The SSP is an embedded ARM Cortex-M3 r2p1 inside the AST2600 BMC SoC.
+# It executes firmware from DRAM (not SPI flash). The CA7 loads the firmware
+# into DRAM before releasing the CM3 from reset.
+#
+# Memory map (CM3 view, matches link/ast2600-ssp.x):
+#   0x0000_0000 – 0x0001_FFFF  : FLASH XIP (128 KB DRAM, firmware code+rodata)
+#   0x0002_0000 – 0x00FF_FFFF  : RAM (cached, ~16 MB usable)
+#   0x0100_0000 – 0x01FF_FFFF  : RAM_NC (non-cached, DMA / IPC shared memory)
+#
+# SWD connection:
+#   The AST2600 exposes the CM3 JTAG/SWD port on dedicated pins (or via the
+#   AST2600 JTAG master controller).  A J-Link adapter in SWD mode at 1 MHz
+#   should work.  If probe-rs fails to attach, fall back to J-Link Commander
+#   with a GDB server (see docs/architecture.md).
+#
+# No flash algorithm is needed — firmware is loaded by the CA7, not flashed
+# from probe-rs.
+
+name: AST2600_SSP
+variants:
+  - name: AST2600_SSP
+    cores:
+      - name: main
+        type: armv7m        # Cortex-M3 (ARMv7-M without FPU)
+        core_access_options:
+          arm:
+            ap: 0
+            psel: 0         # SWD/JTAG port select
+    memory_map:
+      # Firmware execution region (DRAM via CM3 local mapping).
+      # The CA7 sets the physical base via SCUA04; CM3 virtual 0x0 maps to
+      # that physical address.  probe-rs only needs the CM3 virtual range.
+      - Flash:
+          range:
+            start: 0x00000000
+            end:   0x0001FFFF  # 128 KB
+          is_boot_memory: false   # no flash algorithm; CA7 handles loading
+
+      # Cached RAM
+      - Ram:
+          range:
+            start: 0x00020000
+            end:   0x00FFFFFF  # ~16 MB cached DRAM
+
+      # Non-cached RAM (DMA / IPC shared memory)
+      - Ram:
+          range:
+            start: 0x01000000
+            end:   0x01FFFFFF  # 16 MB non-cached DRAM
+
+    # CM3 device peripherals visible on SWD (example — adjust if ROM table differs).
+    # These are standard Cortex-M3 CoreSight components.

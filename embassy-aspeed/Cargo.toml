@@ -1,0 +1,92 @@
+[package]
+name        = "embassy-aspeed"
+version     = "0.1.0"
+edition     = "2021"
+description = "Embassy async HAL for ASPEED AST10xx/AST26xx/AST27xx coprocessors and standalone SoCs"
+repository  = "https://github.com/kyanitecomputer/aspeed-rs"
+publish     = false
+
+# ── Feature flags ──────────────────────────────────────────────────────────────
+[features]
+default = ["defmt"]
+
+# Chip + core target. Exactly one must be enabled.
+ast2600-ssp = [
+    "aspeed-pac/ast2600",
+    "dep:cortex-m",
+    "dep:cortex-m-rt",
+    "dep:embassy-executor",
+    "embassy-executor?/platform-cortex-m",
+    "dep:embassy-time",
+    "dep:embassy-time-driver",
+    "dep:embassy-time-queue-utils",
+    "dep:embassy-hal-internal",
+]
+
+ast1060 = [
+    "aspeed-pac/ast1060",
+    "dep:cortex-m",
+    "dep:cortex-m-rt",
+    "dep:embassy-executor",
+    "embassy-executor?/platform-cortex-m",
+    "dep:embassy-time",
+    "dep:embassy-time-driver",
+    "dep:embassy-time-queue-utils",
+    "dep:embassy-hal-internal",
+]
+
+ast2700-bootmcu = [
+    "aspeed-pac/ast2700-bootmcu",
+    "dep:riscv",
+    "dep:riscv-rt",
+    "dep:embassy-executor",
+    "embassy-executor?/platform-riscv32",
+    "dep:embassy-time",
+    "dep:embassy-time-driver",
+    "dep:embassy-time-queue-utils",
+    "dep:embassy-hal-internal",
+]
+
+defmt = [
+    "dep:defmt",
+    "embassy-executor?/defmt",
+    "embassy-time?/defmt",
+    "embassy-sync/defmt",
+    "embassy-hal-internal?/defmt",
+]
+
+# ── Dependencies ───────────────────────────────────────────────────────────────
+[dependencies]
+# Generated PAC — relative path to aspeed-data sibling repo.
+# Post-push: switch to git = "https://github.com/kyanitecomputer/aspeed-data", rev = "<sha>"
+aspeed-pac = { path = "../../aspeed-data/aspeed-pac" }
+
+embassy-executor         = { workspace = true, features = ["executor-thread"], optional = true }
+embassy-time             = { workspace = true, features = ["tick-hz-1_000_000"], optional = true }
+embassy-time-driver      = { workspace = true, optional = true }
+embassy-time-queue-utils = { workspace = true, optional = true }
+embassy-sync             = { workspace = true }
+embassy-hal-internal     = { workspace = true, optional = true }
+
+cortex-m    = { workspace = true, optional = true }
+cortex-m-rt = { workspace = true, optional = true }
+
+riscv    = { version = "0.11", features = ["critical-section-single-hart"], optional = true }
+riscv-rt = { version = "0.12", optional = true }
+
+defmt = { workspace = true, optional = true }
+
+embedded-hal       = { workspace = true }
+embedded-hal-async = { workspace = true }
+embedded-io        = { workspace = true }
+embedded-io-async  = { workspace = true }
+
+critical-section = { workspace = true }
+
+[target.'cfg(target_arch = "arm")'.dev-dependencies]
+defmt-rtt  = { workspace = true }
+panic-halt = "0.2"
+
+[target.'cfg(target_arch = "riscv32")'.dev-dependencies]
+defmt-rtt  = { workspace = true }
+panic-halt = "0.2"

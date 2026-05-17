@@ -137,7 +137,9 @@ pub struct I2cConfig {
 
 impl Default for I2cConfig {
     fn default() -> Self {
-        Self { clk_timing: CLK_100KHZ }
+        Self {
+            clk_timing: CLK_100KHZ,
+        }
     }
 }
 
@@ -162,12 +164,7 @@ impl I2cBus {
         // Enable new register mode and new clock divider mode globally.
         let gr = global_base();
         let gctrl = unsafe { ptr::read_volatile(gr.add(G_CTRL)) };
-        unsafe {
-            ptr::write_volatile(
-                gr.add(G_CTRL),
-                gctrl | G_REG_MODE | G_CLK_DIV_MODE,
-            )
-        };
+        unsafe { ptr::write_volatile(gr.add(G_CTRL), gctrl | G_REG_MODE | G_CLK_DIV_MODE) };
 
         // Configure channel.
         let cr = ch_base(ch);
@@ -232,9 +229,7 @@ impl I2cBus {
         self.rw(C_POOL_CTRL, pool_ctrl);
 
         // Issue packet-mode write: target addr + TX pool + start.
-        let cmd = M_CMD_TX_POOL
-            | M_CMD_PKT_OP
-            | ((addr as u32) << M_CMD_TARGET_SHIFT);
+        let cmd = M_CMD_TX_POOL | M_CMD_PKT_OP | ((addr as u32) << M_CMD_TARGET_SHIFT);
         self.rw(M_CMD, cmd);
 
         self.poll_done()
@@ -254,10 +249,8 @@ impl I2cBus {
         self.rw(C_POOL_CTRL, pool_ctrl);
 
         // Issue packet-mode read.
-        let cmd = M_CMD_RX_POOL
-            | M_CMD_PKT_OP
-            | M_CMD_RX_LAST
-            | ((addr as u32) << M_CMD_TARGET_SHIFT);
+        let cmd =
+            M_CMD_RX_POOL | M_CMD_PKT_OP | M_CMD_RX_LAST | ((addr as u32) << M_CMD_TARGET_SHIFT);
         self.rw(M_CMD, cmd | (1 << 28)); // RnW=1 for read
 
         self.poll_done()?;

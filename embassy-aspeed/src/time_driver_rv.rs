@@ -37,15 +37,15 @@ use embassy_time_queue_utils::Queue;
 
 const TIMER_BASE: usize = 0x14C3_6000;
 
-const COUNT_L:   *const u32 = (TIMER_BASE + 0x00) as *const u32;
-const COUNT_H:   *const u32 = (TIMER_BASE + 0x04) as *const u32;
-const ALARM_L:   *mut u32   = (TIMER_BASE + 0x08) as *mut u32;
-const ALARM_H:   *mut u32   = (TIMER_BASE + 0x0C) as *mut u32;
-const CTRL:      *mut u32   = (TIMER_BASE + 0x10) as *mut u32;
-const CTRL_CLR:  *mut u32   = (TIMER_BASE + 0x14) as *mut u32;
+const COUNT_L: *const u32 = (TIMER_BASE + 0x00) as *const u32;
+const COUNT_H: *const u32 = (TIMER_BASE + 0x04) as *const u32;
+const ALARM_L: *mut u32 = (TIMER_BASE + 0x08) as *mut u32;
+const ALARM_H: *mut u32 = (TIMER_BASE + 0x0C) as *mut u32;
+const CTRL: *mut u32 = (TIMER_BASE + 0x10) as *mut u32;
+const CTRL_CLR: *mut u32 = (TIMER_BASE + 0x14) as *mut u32;
 
-const EN:        u32 = 1 << 0;
-const RESET_EN:  u32 = 1 << 3;
+const EN: u32 = 1 << 0;
+const RESET_EN: u32 = 1 << 3;
 const COUNT_CLR: u32 = 1 << 4;
 
 // ── Driver ────────────────────────────────────────────────────────────────────
@@ -64,7 +64,7 @@ impl BootMcuTimerDriver {
         // consistent pair rather than returning a corrupted value.
         loop {
             let h1 = unsafe { COUNT_H.read_volatile() };
-            let l  = unsafe { COUNT_L.read_volatile() };
+            let l = unsafe { COUNT_L.read_volatile() };
             let h2 = unsafe { COUNT_H.read_volatile() };
             if h1 == h2 {
                 return ((h1 as u64) << 32) | (l as u64);
@@ -93,7 +93,9 @@ impl BootMcuTimerDriver {
     fn on_interrupt(&self) {
         critical_section::with(|cs| {
             // Disable the alarm interrupt.
-            unsafe { CTRL_CLR.write_volatile(EN); }
+            unsafe {
+                CTRL_CLR.write_volatile(EN);
+            }
 
             let now = self.read_count();
             let mut queue = self.queue.borrow(cs).borrow_mut();

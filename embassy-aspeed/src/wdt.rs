@@ -36,12 +36,12 @@ use core::ptr;
 
 const WDT0_BASE: usize = 0x7E78_5000;
 
-const WDT_STATUS:         *const u32 = (WDT0_BASE + 0x00) as *const u32;
-const WDT_RELOAD:         *mut u32   = (WDT0_BASE + 0x04) as *mut u32;
-const WDT_RESTART:        *mut u32   = (WDT0_BASE + 0x08) as *mut u32;
-const WDT_CTRL:           *mut u32   = (WDT0_BASE + 0x0C) as *mut u32;
-const WDT_SW_RESET_CTRL:  *mut u32   = (WDT0_BASE + 0x24) as *mut u32;
-const WDT_SW_RESET_MASK1: *mut u32   = (WDT0_BASE + 0x28) as *mut u32;
+const WDT_STATUS: *const u32 = (WDT0_BASE + 0x00) as *const u32;
+const WDT_RELOAD: *mut u32 = (WDT0_BASE + 0x04) as *mut u32;
+const WDT_RESTART: *mut u32 = (WDT0_BASE + 0x08) as *mut u32;
+const WDT_CTRL: *mut u32 = (WDT0_BASE + 0x0C) as *mut u32;
+const WDT_SW_RESET_CTRL: *mut u32 = (WDT0_BASE + 0x24) as *mut u32;
+const WDT_SW_RESET_MASK1: *mut u32 = (WDT0_BASE + 0x28) as *mut u32;
 
 /// Magic key to feed the watchdog (write to WDT_RESTART).
 const WDT_FEED_KEY: u32 = 0x4755;

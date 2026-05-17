@@ -45,18 +45,18 @@ use core::ptr;
 
 // ── Register layout ───────────────────────────────────────────────────────────
 
-const IPC1_BASE:    usize = 0x14C3_9000;
+const IPC1_BASE: usize = 0x14C3_9000;
 const SUBCHAN_SIZE: usize = 0x200;
-const TX_OFFSET:    usize = 0x100;
-const RX_OFFSET:    usize = 0x000;
+const TX_OFFSET: usize = 0x100;
+const RX_OFFSET: usize = 0x000;
 
-const IPCR_TRIG:   usize = 0x00;
+const IPCR_TRIG: usize = 0x00;
 const IPCR_ENABLE: usize = 0x04;
 const IPCR_STATUS: usize = 0x08;
-const IPCR_DATA0:  usize = 0x10;
-const IPCR_DATA1:  usize = 0x30;
-const IPCR_DATA2:  usize = 0x50;
-const IPCR_DATA3:  usize = 0x70;
+const IPCR_DATA0: usize = 0x10;
+const IPCR_DATA1: usize = 0x30;
+const IPCR_DATA2: usize = 0x50;
+const IPCR_DATA3: usize = 0x70;
 
 const DATA_OFFSETS: [usize; 4] = [IPCR_DATA0, IPCR_DATA1, IPCR_DATA2, IPCR_DATA3];
 

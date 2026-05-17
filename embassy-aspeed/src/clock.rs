@@ -194,10 +194,10 @@ pub fn apll_hz() -> u32 {
 // Re-export chip-specific UART clock constant at the module level so other
 // HAL modules (uart.rs) can reference `crate::clock::UART_CLK_HZ` uniformly.
 // The fallback constant allows host-side unit tests to compile without a chip feature.
-#[cfg(feature = "ast2600-ssp")]
-pub use ast2600_clk::UART_CLK_HZ;
 #[cfg(feature = "ast1060")]
 pub use ast1060_clk::UART5_CLK_24M_HZ as UART_CLK_HZ;
+#[cfg(feature = "ast2600-ssp")]
+pub use ast2600_clk::UART_CLK_HZ;
 #[cfg(not(any(feature = "ast2600-ssp", feature = "ast1060")))]
 pub const UART_CLK_HZ: u32 = 24_000_000 / 13; // placeholder for host test builds
 

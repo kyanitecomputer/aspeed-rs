@@ -48,15 +48,21 @@ const TIMER_STATUS_OFF: [usize; 8] = [
     0x80 / 4, // T8
 ];
 
-const TMC_CTRL:       *mut u32 = (TIMER_BASE + 0x30) as *mut u32;
+const TMC_CTRL: *mut u32 = (TIMER_BASE + 0x30) as *mut u32;
 const TMC_INT_STATUS: *mut u32 = (TIMER_BASE + 0x34) as *mut u32;
-const TMC_CTRL_CLR:   *mut u32 = (TIMER_BASE + 0x3C) as *mut u32;
+const TMC_CTRL_CLR: *mut u32 = (TIMER_BASE + 0x3C) as *mut u32;
 
 // ── Global wakers (one per timer) ─────────────────────────────────────────────
 
 static TIMER_WAKERS: [AtomicWaker; 8] = [
-    AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
-    AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
 ];
 
 // ── CountdownTimer ────────────────────────────────────────────────────────────
@@ -92,8 +98,8 @@ impl CountdownTimer {
             // Enable: set EN bit and CLK_SEL=1 (1 MHz) and OVF_INTR=1.
             // Bit layout: [EN, CLK_SEL, OVF_INTR, WDT_EN] at bits idx*4 + [0,1,2,3].
             let ctrl_bits = 0b0111u32 << (self.idx * 4); // EN|CLK_SEL|OVF_INTR
-            // Read-modify-write: TMC_CTRL controls all 8 timers in one register.
-            // Overwriting the whole register would stop every other running timer.
+                                                         // Read-modify-write: TMC_CTRL controls all 8 timers in one register.
+                                                         // Overwriting the whole register would stop every other running timer.
             let prev = ptr::read_volatile(TMC_CTRL);
             ptr::write_volatile(TMC_CTRL, prev | ctrl_bits);
         }
@@ -102,7 +108,7 @@ impl CountdownTimer {
     /// Stop the timer.
     pub fn stop(&mut self) {
         let ctrl_bits = 0b1111u32 << (self.idx * 4); // clear all 4 bits
-        // SAFETY: Timer MMIO write.
+                                                     // SAFETY: Timer MMIO write.
         unsafe { ptr::write_volatile(TMC_CTRL_CLR, ctrl_bits) };
     }
 

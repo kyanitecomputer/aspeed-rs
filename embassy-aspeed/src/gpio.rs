@@ -83,10 +83,7 @@ fn gpio_rw(word_off: usize, val: u32) {
 }
 
 fn index_write(pin_num: u8, idx_type: u32, idx_data: u32) {
-    let word = (pin_num as u32)
-        | (IDX_CMD_WRITE << 12)
-        | (idx_type << 16)
-        | (idx_data << 20);
+    let word = (pin_num as u32) | (IDX_CMD_WRITE << 12) | (idx_type << 16) | (idx_data << 20);
     gpio_rw(IDX_REG_WORD, word);
 }
 
@@ -110,26 +107,68 @@ struct GroupRegs {
 /// Register offsets for each GPIO group (from Zephyr gpio_aspeed.h).
 static GROUPS: [GroupRegs; 7] = [
     // Group 0: A/B/C/D
-    GroupRegs { data: 0x000/4, dir: 0x004/4, int_status: 0x018/4,
-                cmd_src0: 0x060/4, cmd_src1: 0x064/4, data_read: 0x0C0/4 },
+    GroupRegs {
+        data: 0x000 / 4,
+        dir: 0x004 / 4,
+        int_status: 0x018 / 4,
+        cmd_src0: 0x060 / 4,
+        cmd_src1: 0x064 / 4,
+        data_read: 0x0C0 / 4,
+    },
     // Group 1: E/F/G/H
-    GroupRegs { data: 0x020/4, dir: 0x024/4, int_status: 0x038/4,
-                cmd_src0: 0x068/4, cmd_src1: 0x06C/4, data_read: 0x0C4/4 },
+    GroupRegs {
+        data: 0x020 / 4,
+        dir: 0x024 / 4,
+        int_status: 0x038 / 4,
+        cmd_src0: 0x068 / 4,
+        cmd_src1: 0x06C / 4,
+        data_read: 0x0C4 / 4,
+    },
     // Group 2: I/J/K/L
-    GroupRegs { data: 0x070/4, dir: 0x074/4, int_status: 0x0A8/4,
-                cmd_src0: 0x090/4, cmd_src1: 0x094/4, data_read: 0x0C8/4 },
+    GroupRegs {
+        data: 0x070 / 4,
+        dir: 0x074 / 4,
+        int_status: 0x0A8 / 4,
+        cmd_src0: 0x090 / 4,
+        cmd_src1: 0x094 / 4,
+        data_read: 0x0C8 / 4,
+    },
     // Group 3: M/N/O/P
-    GroupRegs { data: 0x078/4, dir: 0x07C/4, int_status: 0x0F8/4,
-                cmd_src0: 0x0E0/4, cmd_src1: 0x0E4/4, data_read: 0x0CC/4 },
+    GroupRegs {
+        data: 0x078 / 4,
+        dir: 0x07C / 4,
+        int_status: 0x0F8 / 4,
+        cmd_src0: 0x0E0 / 4,
+        cmd_src1: 0x0E4 / 4,
+        data_read: 0x0CC / 4,
+    },
     // Group 4: Q/R/S/T
-    GroupRegs { data: 0x080/4, dir: 0x084/4, int_status: 0x128/4,
-                cmd_src0: 0x110/4, cmd_src1: 0x114/4, data_read: 0x0D0/4 },
+    GroupRegs {
+        data: 0x080 / 4,
+        dir: 0x084 / 4,
+        int_status: 0x128 / 4,
+        cmd_src0: 0x110 / 4,
+        cmd_src1: 0x114 / 4,
+        data_read: 0x0D0 / 4,
+    },
     // Group 5: U/V/W/X
-    GroupRegs { data: 0x088/4, dir: 0x08C/4, int_status: 0x158/4,
-                cmd_src0: 0x140/4, cmd_src1: 0x144/4, data_read: 0x0D4/4 },
+    GroupRegs {
+        data: 0x088 / 4,
+        dir: 0x08C / 4,
+        int_status: 0x158 / 4,
+        cmd_src0: 0x140 / 4,
+        cmd_src1: 0x144 / 4,
+        data_read: 0x0D4 / 4,
+    },
     // Group 6: Y/Z (16 pins only)
-    GroupRegs { data: 0x1E0/4, dir: 0x1E4/4, int_status: 0x188/4,
-                cmd_src0: 0x170/4, cmd_src1: 0x174/4, data_read: 0x0D8/4 },
+    GroupRegs {
+        data: 0x1E0 / 4,
+        dir: 0x1E4 / 4,
+        int_status: 0x188 / 4,
+        cmd_src0: 0x170 / 4,
+        cmd_src1: 0x174 / 4,
+        data_read: 0x0D8 / 4,
+    },
 ];
 
 // ── Wakers (one per pin, up to 208 pins) ─────────────────────────────────────
@@ -138,14 +177,38 @@ static GROUPS: [GroupRegs; 7] = [
 // Only 32 wakers = 32 pins can wait for edges simultaneously.
 const MAX_WAITING: usize = 32;
 static GPIO_WAKERS: [AtomicWaker; MAX_WAITING] = [
-        AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
-        AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
-        AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
-        AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
-        AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
-        AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
-        AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
-        AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
+    AtomicWaker::new(),
 ];
 /// Pin-to-waker slot mapping, protected by critical section.
 static WAKER_PINS: critical_section::Mutex<core::cell::Cell<[u8; MAX_WAITING]>> =
@@ -164,7 +227,9 @@ static WAKER_SLOT_FIRED: critical_section::Mutex<core::cell::Cell<u32>> =
     critical_section::Mutex::new(core::cell::Cell::new(0));
 
 // Drop unused variable warning
-const _: () = { let _ = &AtomicWaker::new; };
+const _: () = {
+    let _ = &AtomicWaker::new;
+};
 
 // ── GpioPin ───────────────────────────────────────────────────────────────────
 
@@ -238,7 +303,11 @@ pub const fn pin(port: char, bit: u8) -> GpioPin {
     let number = p * 8 + bit;
     let group = p / 4;
     let bit_in_group = (p % 4) * 8 + bit;
-    GpioPin { number, group, bit: bit_in_group }
+    GpioPin {
+        number,
+        group,
+        bit: bit_in_group,
+    }
 }
 
 // ── Claim master ownership ────────────────────────────────────────────────────
@@ -251,7 +320,10 @@ fn claim_master(p: &GpioPin) {
         // Configure CMD_SRC_SEL slot 2 (mst3) to hold SSP master ID = 6.
         let sel = gpio_rr(CMD_SRC_SEL_WORD);
         if ((sel >> 10) & 0x1F) != SSP_CMD_SRC_SEL {
-            gpio_rw(CMD_SRC_SEL_WORD, (sel & !(0x1F << 10)) | (SSP_CMD_SRC_SEL << 10));
+            gpio_rw(
+                CMD_SRC_SEL_WORD,
+                (sel & !(0x1F << 10)) | (SSP_CMD_SRC_SEL << 10),
+            );
         }
         let gr = p.gr();
         let mask = 1u32 << p.bit;
@@ -441,7 +513,12 @@ impl Input {
         index_write(self.pin.number, IDX_TYPE_INTR, data);
         // `int_armed: true` tells Drop to disable the interrupt.  This covers
         // both normal completion and cancellation (future dropped before Ready).
-        EdgeFuture { pin: self.pin, slot: None, int_armed: true }.await;
+        EdgeFuture {
+            pin: self.pin,
+            slot: None,
+            int_armed: true,
+        }
+        .await;
     }
 }
 

@@ -130,7 +130,8 @@ pub fn reinit(hclk_hz: u32) {
 fn systick_configure(reload: u32) {
     // SAFETY: sole owner of core peripherals at init time.
     let mut cp = unsafe { cortex_m::Peripherals::steal() };
-    cp.SYST.set_clock_source(cortex_m::peripheral::syst::SystClkSource::Core);
+    cp.SYST
+        .set_clock_source(cortex_m::peripheral::syst::SystClkSource::Core);
     cp.SYST.set_reload(reload);
     cp.SYST.clear_current();
     cp.SYST.enable_counter();

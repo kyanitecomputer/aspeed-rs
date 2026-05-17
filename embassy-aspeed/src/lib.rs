@@ -51,29 +51,33 @@ pub use aspeed_pac as pac;
 pub mod boot;
 #[cfg(feature = "ast2700-bootmcu")]
 pub mod boot_rv;
+pub mod clock;
 #[cfg(feature = "ast2700-bootmcu")]
 pub mod ipc1;
-pub mod clock;
 // uart, gpio, timer, wdt are chip-specific (use hardware registers directly).
 // Gated to prevent compilation for host-side unit tests (no chip feature active).
-#[cfg(any(feature = "ast2600-ssp", feature = "ast1060", feature = "ast2700-bootmcu"))]
-pub mod uart;
+pub mod addr;
 #[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
 pub mod gpio;
-#[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
-pub mod timer;
-#[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
-pub mod wdt;
 #[cfg(feature = "ast1060")]
 pub mod i2c;
+pub mod ipc;
 #[cfg(feature = "ast1060")]
 pub mod spi;
-pub mod ipc;
-pub mod addr;
 #[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
 pub mod time_driver;
 #[cfg(feature = "ast2700-bootmcu")]
 pub mod time_driver_rv;
+#[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
+pub mod timer;
+#[cfg(any(
+    feature = "ast2600-ssp",
+    feature = "ast1060",
+    feature = "ast2700-bootmcu"
+))]
+pub mod uart;
+#[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
+pub mod wdt;
 
 // ── Public top-level API ──────────────────────────────────────────────────────
 

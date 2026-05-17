@@ -146,11 +146,19 @@ impl SpiBus {
     }
 
     fn ce_ctrl_off(&self) -> usize {
-        if self.ce_idx == 0 { CE0_CTRL } else { CE1_CTRL }
+        if self.ce_idx == 0 {
+            CE0_CTRL
+        } else {
+            CE1_CTRL
+        }
     }
 
     fn ce_range_off(&self) -> usize {
-        if self.ce_idx == 0 { CE0_RANGE } else { CE1_RANGE }
+        if self.ce_idx == 0 {
+            CE0_RANGE
+        } else {
+            CE1_RANGE
+        }
     }
 
     fn set_cmd_mode(&self, mode: u32) {
@@ -248,11 +256,7 @@ impl SpiBus {
         self.write_enable();
 
         // Issue sector erase via user mode (3-byte address).
-        let addr = [
-            (offset >> 16) as u8,
-            (offset >> 8) as u8,
-            offset as u8,
-        ];
+        let addr = [(offset >> 16) as u8, (offset >> 8) as u8, offset as u8];
         self.user_transfer(CMD_SE, &addr, &mut []);
         self.wait_not_busy();
         Ok(())
@@ -266,11 +270,7 @@ impl SpiBus {
         self.wait_not_busy();
         self.write_enable();
 
-        let addr = [
-            (offset >> 16) as u8,
-            (offset >> 8) as u8,
-            offset as u8,
-        ];
+        let addr = [(offset >> 16) as u8, (offset >> 8) as u8, offset as u8];
         self.user_transfer(CMD_BE, &addr, &mut []);
         self.wait_not_busy();
         Ok(())
@@ -338,7 +338,7 @@ impl SpiBus {
         self.rw(DMA_FLASH, (self.win as u32) + flash_offset);
         self.rw(DMA_RAM, sram_addr);
         self.rw(DMA_LEN, len.saturating_sub(1)); // len-1 for 0-based count
-        // Enable DMA read (dir=0, mem mode).
+                                                 // Enable DMA read (dir=0, mem mode).
         self.rw(DMA_CTRL, 0b01); // enable=1, dir=0 (read)
 
         // Poll DMA status.

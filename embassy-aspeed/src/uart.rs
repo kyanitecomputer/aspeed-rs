@@ -131,7 +131,9 @@ impl Uart {
     /// Call [`crate::clock::clock_enable`] with `ClockGate::UART11CLK` first.
     #[cfg(feature = "ast2600-ssp")]
     pub fn new_uart11(cfg: Config) -> Self {
-        let uart = Self { base: UART11_BASE as *mut u32 };
+        let uart = Self {
+            base: UART11_BASE as *mut u32,
+        };
         uart.hw_init(cfg);
         uart
     }
@@ -141,7 +143,9 @@ impl Uart {
     /// UART5 clock is always-on on AST1060; no clock gate call required.
     #[cfg(feature = "ast1060")]
     pub fn new_uart5(cfg: Config) -> Self {
-        let uart = Self { base: UART5_BASE as *mut u32 };
+        let uart = Self {
+            base: UART5_BASE as *mut u32,
+        };
         uart.hw_init(cfg);
         uart
     }
@@ -152,7 +156,9 @@ impl Uart {
     /// available.  UART clock = 24 MHz / 13 ≈ 1,846,153 Hz.
     #[cfg(feature = "ast2700-bootmcu")]
     pub fn new_uart12(cfg: Config) -> Self {
-        let uart = Self { base: UART12_BASE as *mut u32 };
+        let uart = Self {
+            base: UART12_BASE as *mut u32,
+        };
         uart.hw_init(cfg);
         uart
     }

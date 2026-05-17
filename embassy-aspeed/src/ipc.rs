@@ -26,17 +26,17 @@ use core::pin::Pin;
 use core::ptr;
 use core::task::{Context, Poll};
 
-use critical_section::Mutex;
 use core::cell::Cell;
+use critical_section::Mutex;
 
 use embassy_sync::waitqueue::AtomicWaker;
 
 // ── IPC register addresses ────────────────────────────────────────────────────
 
 const IPC_BASE: usize = 0x7E6C_0000;
-const IPC_TRIG:   *mut u32 = (IPC_BASE + 0x18) as *mut u32;
+const IPC_TRIG: *mut u32 = (IPC_BASE + 0x18) as *mut u32;
 const IPC_STATUS: *const u32 = (IPC_BASE + 0x28) as *const u32;
-const IPC_CLEAR:  *mut u32 = (IPC_BASE + 0x2C) as *mut u32;
+const IPC_CLEAR: *mut u32 = (IPC_BASE + 0x2C) as *mut u32;
 
 pub const NUM_CHANNELS: usize = 15;
 
@@ -46,11 +46,21 @@ pub const NUM_CHANNELS: usize = 15;
 static CHANNEL_WAKERS: [AtomicWaker; NUM_CHANNELS] = {
     // const-init array of AtomicWaker
     [
-        AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
-        AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
-        AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
-        AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
-        AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
+        AtomicWaker::new(),
+        AtomicWaker::new(),
+        AtomicWaker::new(),
+        AtomicWaker::new(),
+        AtomicWaker::new(),
+        AtomicWaker::new(),
+        AtomicWaker::new(),
+        AtomicWaker::new(),
+        AtomicWaker::new(),
+        AtomicWaker::new(),
+        AtomicWaker::new(),
+        AtomicWaker::new(),
+        AtomicWaker::new(),
+        AtomicWaker::new(),
+        AtomicWaker::new(),
     ]
 };
 
@@ -71,7 +81,10 @@ impl Channel {
     ///
     /// Panics if `n >= NUM_CHANNELS` (15).
     pub const fn new(n: u8) -> Self {
-        assert!((n as usize) < NUM_CHANNELS, "IPC channel out of range (0..15)");
+        assert!(
+            (n as usize) < NUM_CHANNELS,
+            "IPC channel out of range (0..15)"
+        );
         Self(n)
     }
 
@@ -189,7 +202,7 @@ impl Future for RecvChannel {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let mask = 1u32 << self.0.0;
+        let mask = 1u32 << self.0 .0;
         let pending = critical_section::with(|cs| PENDING.borrow(cs).get());
         if pending & mask != 0 {
             critical_section::with(|cs| {
@@ -198,7 +211,7 @@ impl Future for RecvChannel {
             });
             return Poll::Ready(());
         }
-        CHANNEL_WAKERS[self.0.0 as usize].register(cx.waker());
+        CHANNEL_WAKERS[self.0 .0 as usize].register(cx.waker());
         let pending = critical_section::with(|cs| PENDING.borrow(cs).get());
         if pending & mask != 0 {
             critical_section::with(|cs| {
@@ -243,16 +256,16 @@ macro_rules! ipc_irq {
     };
 }
 
-ipc_irq!(IPC0,  0);
-ipc_irq!(IPC1,  1);
-ipc_irq!(IPC2,  2);
-ipc_irq!(IPC3,  3);
-ipc_irq!(IPC4,  4);
-ipc_irq!(IPC5,  5);
-ipc_irq!(IPC6,  6);
-ipc_irq!(IPC7,  7);
-ipc_irq!(IPC8,  8);
-ipc_irq!(IPC9,  9);
+ipc_irq!(IPC0, 0);
+ipc_irq!(IPC1, 1);
+ipc_irq!(IPC2, 2);
+ipc_irq!(IPC3, 3);
+ipc_irq!(IPC4, 4);
+ipc_irq!(IPC5, 5);
+ipc_irq!(IPC6, 6);
+ipc_irq!(IPC7, 7);
+ipc_irq!(IPC8, 8);
+ipc_irq!(IPC9, 9);
 ipc_irq!(IPC10, 10);
 ipc_irq!(IPC11, 11);
 ipc_irq!(IPC12, 12);

@@ -204,7 +204,7 @@ pub const UART_CLK_HZ: u32 = 24_000_000 / 13; // placeholder for host test build
 // ── AST1060 ───────────────────────────────────────────────────────────────────
 
 #[cfg(feature = "ast1060")]
-mod ast1060_clk {
+pub(crate) mod ast1060_clk {
     use super::SCU_BASE;
 
     /// H-PLL parameter register (SCU200).

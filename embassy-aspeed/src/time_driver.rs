@@ -13,16 +13,22 @@
 //! `Queue`.  On each tick interrupt the queue is drained, waking any futures
 //! whose deadline has passed.
 //!
+//! # Minimum SysTick reload
+//!
+//! At low HCLK the SysTick reload value for 1 µs ticks can be so small that
+//! the CPU cannot service the interrupt (Cortex-M4 exception entry/exit costs
+//! ~24 cycles alone).  [`init`] reads the actual HCLK from SCU registers and
+//! clamps the reload to [`MIN_SYSTICK_RELOAD`] (99 → 100 cycle period).
+//! When clamped, `embassy-time` runs slower than real-time; firmware should
+//! enable the PLL and call [`reinit`] to restore 1:1 µs ticks.
+//!
 //! # Default clock sources
 //!
 //! | Chip | Core clock at boot | SYSTICK_RELOAD |
 //! |------|--------------------|----------------|
 //! | AST2600 SSP | 200 MHz (set by CA7) | 199 |
-//! | AST1060 | 25 MHz (HPLL bypassed, SCU200[24]=1) | 24 |
-//!
-//! For AST1060, the PLL is bypassed at reset (HCLK = CLKIN = 25 MHz).
-//! Firmware can initialise the PLL and call [`reinit`] to update the
-//! SysTick period.
+//! | AST1060 | 25 MHz (PLL bypassed) → clamped to 99 |  |
+//! | AST1060 | 200 MHz (after PLL init) | 199 |
 //!
 //! # Initialisation
 //!
@@ -44,17 +50,10 @@ use embassy_time_queue_utils::Queue;
 /// Embassy tick frequency (1 MHz = 1 µs per tick).
 const TICK_HZ: u64 = 1_000_000;
 
-/// Default core clock for AST2600 SSP (set by CA7 before SSP release).
-#[cfg(feature = "ast2600-ssp")]
-const DEFAULT_HCLK_HZ: u64 = 200_000_000;
-
-/// Default core clock for AST1060 at boot (HPLL bypassed → PCLK = CLKIN = 25 MHz).
-/// After PLL setup, call `reinit(new_hclk_hz)` to update the SysTick period.
-#[cfg(feature = "ast1060")]
-const DEFAULT_HCLK_HZ: u64 = 25_000_000;
-
-/// SysTick reload value computed from the default HCLK.
-const SYSTICK_RELOAD: u32 = (DEFAULT_HCLK_HZ / TICK_HZ - 1) as u32;
+/// Minimum SysTick reload value.  Cortex-M4 exception entry (12 cycles) +
+/// handler body (~15 cycles) + exit (12 cycles) ≈ 39 cycles minimum.
+/// A reload of 99 (100 cycle period) gives ~60% CPU headroom for main.
+const MIN_SYSTICK_RELOAD: u32 = 99;
 
 // ── Driver state ──────────────────────────────────────────────────────────────
 
@@ -101,14 +100,19 @@ embassy_time_driver::time_driver_impl!(static DRIVER: SysTickDriver = SysTickDri
 
 // ── Initialisation ────────────────────────────────────────────────────────────
 
-/// Initialise the SysTick time driver using the default chip clock.
+/// Initialise the SysTick time driver by reading the actual core clock from
+/// SCU registers.
 ///
-/// - AST2600 SSP: HCLK = 200 MHz (set by CA7).
-/// - AST1060: PCLK = 25 MHz (HPLL bypassed at reset).
+/// - AST2600 SSP: HCLK = 200 MHz (set by CA7 before SSP release).
+/// - AST1060: reads HPLL + PCLK divider from SCU200/SCU310.  At reset
+///   (HPLL bypassed), PCLK = 25 MHz → reload would be 24, which starves
+///   the CPU.  The reload is clamped to [`MIN_SYSTICK_RELOAD`] (99) so
+///   the CPU can still execute main-thread code.
 ///
 /// Called once from [`crate::init`].
 pub fn init() {
-    systick_configure(SYSTICK_RELOAD);
+    let reload = compute_reload();
+    systick_configure(reload);
 }
 
 /// Reinitialise SysTick after a clock frequency change.
@@ -123,8 +127,38 @@ pub fn init() {
 /// embassy_aspeed::time_driver::reinit(500_000_000);
 /// ```
 pub fn reinit(hclk_hz: u32) {
-    let reload = (hclk_hz as u64 / TICK_HZ - 1) as u32;
+    let raw = (hclk_hz as u64 / TICK_HZ - 1) as u32;
+    let reload = if raw < MIN_SYSTICK_RELOAD { MIN_SYSTICK_RELOAD } else { raw };
     systick_configure(reload);
+}
+
+/// Compute the SysTick reload value from the actual hardware clock.
+#[cfg(feature = "ast2600-ssp")]
+fn compute_reload() -> u32 {
+    // CA7 configures HCLK = 200 MHz before releasing the SSP.
+    // No SCU read needed — the value is fixed.
+    let raw = (200_000_000u64 / TICK_HZ - 1) as u32;
+    if raw < MIN_SYSTICK_RELOAD { MIN_SYSTICK_RELOAD } else { raw }
+}
+
+#[cfg(feature = "ast1060")]
+fn compute_reload() -> u32 {
+    use crate::clock::ast1060_clk;
+    use core::ptr;
+
+    // Read actual HPLL and PCLK divider from SCU registers.
+    let hpll_reg = unsafe { ptr::read_volatile(ast1060_clk::HPLL_PARAM) };
+    let clk_sel4 = unsafe { ptr::read_volatile(ast1060_clk::CLK_SEL4) };
+    let hpll_hz = ast1060_clk::hpll_from_reg(hpll_reg);
+    let pclk_hz = if hpll_hz == 0 {
+        // PLL powered down — fall back to crystal input.
+        ast1060_clk::CLKIN_HZ
+    } else {
+        ast1060_clk::pclk_from_hpll_and_reg(hpll_hz, clk_sel4)
+    };
+
+    let raw = (pclk_hz as u64 / TICK_HZ).saturating_sub(1) as u32;
+    if raw < MIN_SYSTICK_RELOAD { MIN_SYSTICK_RELOAD } else { raw }
 }
 
 fn systick_configure(reload: u32) {

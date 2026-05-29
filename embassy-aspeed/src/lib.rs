@@ -59,7 +59,7 @@ pub mod ipc1;
 pub mod addr;
 #[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
 pub mod gpio;
-#[cfg(feature = "ast1060")]
+#[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
 pub mod i2c;
 pub mod ipc;
 #[cfg(feature = "ast1060")]

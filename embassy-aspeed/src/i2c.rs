@@ -1,20 +1,45 @@
-//! I2C/SMBus master driver (AST1060, 14 channels).
+//! I2C/SMBus master driver (AST1060 14-channel / AST2600-SSP 16-channel).
 #![allow(dead_code)]
 //!
-//! Uses the AST1060 **new register mode** (I2CG0C[2]=1) with pool-buffer
-//! transfer mode for simplicity.  DMA and slave mode are not implemented.
+//! Uses **new register mode** (I2CG0C[2]=1) with pool-buffer transfer mode.
+//! DMA and slave mode are not implemented.
 //!
-//! # Hardware setup
+//! # Hardware setup — AST1060
 //!
 //! | Channel N | Base address | IRQ |
 //! |-----------|-------------|-----|
 //! | 0 | 0x7E7B_0080 | 110 |
-//! | 1 | 0x7E7B_0100 | 111 |
 //! | … | … | … |
 //! | 13 | 0x7E7B_0700 | 123 |
 //!
-//! Global registers at `0x7E7B_0000` (I2C_GLOBAL).
-//! Pool buffers at `0x7E7B_0C00 + N * 0x20`.
+//! Global: `0x7E7B_0000`.  Pool SRAM: `0x7E7B_0C00 + N * 0x20`.
+//!
+//! # Hardware setup — AST2600 SSP
+//!
+//! | Channel N | Base address | IRQ |
+//! |-----------|-------------|-----|
+//! | 0 | 0x7E78_A080 | 110 |
+//! | … | … | … |
+//! | 15 | 0x7E78_A880 | 125 |
+//!
+//! Global: `0x7E78_A000`.  Pool SRAM: `0x7E78_AC00 + N * 0x20`.
+//!
+//! # Note on pool SRAM address (AST2600)
+//!
+//! The pool SRAM base `0x7E78_AC00` is inferred from the same +0xC00 offset
+//! used on AST1060; the AST2600 datasheet confirms the pool buffer feature
+//! exists but does not explicitly state the SRAM address in the sections
+//! surveyed.  **Verify on hardware before relying on pool-buffer mode.**
+//! If pool SRAM is absent or at a different offset, switch to byte mode
+//! (I2CC08) for AST2600.
+//!
+//! # Clock timing (AST2600 SSP)
+//!
+//! `I2cConfig::default()` uses `CLK_100KHZ` which was calibrated for
+//! AST1060 at 500 MHz PCLK.  AST2600 SSP HCLK = 200 MHz; the effective
+//! PCLK may differ.  Compute the correct `clk_timing` value for the target
+//! PCLK and pass it to `I2cConfig { clk_timing: ... }` until hardware
+//! calibration is done.
 //!
 //! # Initialisation sequence
 //!
@@ -55,10 +80,23 @@ use embedded_hal_async::i2c::{I2c, Operation};
 
 // ── Base addresses ────────────────────────────────────────────────────────────
 
+#[cfg(feature = "ast1060")]
 const I2C_GLOBAL_BASE: usize = 0x7E7B_0000;
+#[cfg(feature = "ast1060")]
 const I2C_CH_BASE: usize = 0x7E7B_0080;
-const I2C_CH_STRIDE: usize = 0x80;
+#[cfg(feature = "ast1060")]
 const I2C_BUF_BASE: usize = 0x7E7B_0C00;
+
+// AST2600 SSP: I2C bus controller at 0x7E78_A000 (BMC: 0x1E78_A000).
+// Pool SRAM assumed at base+0xC00 — same layout as AST1060. See module note.
+#[cfg(feature = "ast2600-ssp")]
+const I2C_GLOBAL_BASE: usize = 0x7E78_A000;
+#[cfg(feature = "ast2600-ssp")]
+const I2C_CH_BASE: usize = 0x7E78_A080;
+#[cfg(feature = "ast2600-ssp")]
+const I2C_BUF_BASE: usize = 0x7E78_AC00;
+
+const I2C_CH_STRIDE: usize = 0x80;
 const I2C_BUF_STRIDE: usize = 0x20;
 
 // ── Global register offsets (word index) ─────────────────────────────────────
@@ -117,13 +155,21 @@ const M_CMD_TARGET_SHIFT: u32 = 24;
 // Pool buffer max size in bytes (32-byte SRAM, split → 16 TX + 16 RX)
 const POOL_MAX_BYTES: usize = 16;
 
-// ── Global wakers (one per channel, 14 channels) ──────────────────────────────
+// ── Channel count ─────────────────────────────────────────────────────────────
 
+#[cfg(feature = "ast1060")]
 const N_CHANNELS: usize = 14;
+#[cfg(feature = "ast2600-ssp")]
+const N_CHANNELS: usize = 16;
+
+// ── Global wakers (one per channel) ──────────────────────────────────────────
+
 static I2C_WAKERS: [AtomicWaker; N_CHANNELS] = {
-    // AtomicWaker is not Copy, so we need a const fn array
     const W: AtomicWaker = AtomicWaker::new();
-    [W, W, W, W, W, W, W, W, W, W, W, W, W, W]
+    #[cfg(feature = "ast1060")]
+    { [W, W, W, W, W, W, W, W, W, W, W, W, W, W] }
+    #[cfg(feature = "ast2600-ssp")]
+    { [W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W] }
 };
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -145,21 +191,24 @@ impl Default for I2cConfig {
 
 // ── I2cBus ────────────────────────────────────────────────────────────────────
 
-/// AST1060 I2C master bus driver (single channel, pool-buffer mode).
+/// I2C master bus driver (single channel, pool-buffer mode).
+///
+/// Supports AST1060 (channels 0–13) and AST2600 SSP (channels 0–15).
 pub struct I2cBus {
     ch: u8,
 }
 
 impl I2cBus {
-    /// Initialise I2C channel `ch` (0–13) with the given configuration.
+    /// Initialise I2C channel `ch` with the given configuration.
     ///
+    /// AST1060: channels 0–13.  AST2600 SSP: channels 0–15.
     /// Enables new register mode globally on first call (idempotent).
     ///
     /// # Panics
     ///
-    /// Panics if `ch` ≥ 14.
+    /// Panics if `ch` ≥ `N_CHANNELS`.
     pub fn new(ch: u8, cfg: I2cConfig) -> Self {
-        assert!((ch as usize) < N_CHANNELS, "I2C channel must be 0-13");
+        assert!((ch as usize) < N_CHANNELS, "I2C channel out of range");
 
         // Enable new register mode and new clock divider mode globally.
         let gr = global_base();
@@ -404,3 +453,7 @@ i2c_irq!(I2C10, 10);
 i2c_irq!(I2C11, 11);
 i2c_irq!(I2C12, 12);
 i2c_irq!(I2C13, 13);
+#[cfg(feature = "ast2600-ssp")]
+i2c_irq!(I2C14, 14);
+#[cfg(feature = "ast2600-ssp")]
+i2c_irq!(I2C15, 15);

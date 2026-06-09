@@ -61,6 +61,8 @@ pub mod addr;
 pub mod gpio;
 #[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
 pub mod adc;
+#[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
+pub mod hace;
 #[cfg(feature = "ast2600-ssp")]
 pub mod pwm;
 #[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]

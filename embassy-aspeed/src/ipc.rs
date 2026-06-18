@@ -15,57 +15,49 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use embassy_aspeed::ipc::{send, recv, Channel};
+//! use embassy_aspeed::ipc::{send, send_wait_async, recv, Channel};
 //!
-//! send(Channel::new(0)).unwrap();          // send doorbell to CA7 on channel 0
+//! send(Channel::new(0)).unwrap();          // non-blocking send
+//! send_wait_async(Channel::new(0)).await;  // send and yield until CA7 acks
 //! let ch = recv().await;                  // wait for any CA7 doorbell
 //! ```
 
 use core::future::Future;
 use core::pin::Pin;
-use core::ptr;
 use core::task::{Context, Poll};
 
 use core::cell::Cell;
 use critical_section::Mutex;
 
 use embassy_sync::waitqueue::AtomicWaker;
+use aspeed_mmio::MmioBlock;
 
-// ── IPC register addresses ────────────────────────────────────────────────────
+// ── IPC register layout ───────────────────────────────────────────────────────
 
 const IPC_BASE: usize = 0x7E6C_0000;
-const IPC_TRIG: *mut u32 = (IPC_BASE + 0x18) as *mut u32;
-const IPC_STATUS: *const u32 = (IPC_BASE + 0x28) as *const u32;
-const IPC_CLEAR: *mut u32 = (IPC_BASE + 0x2C) as *mut u32;
+const IPC_TRIG_OFF: usize = 0x18;
+const IPC_STATUS_OFF: usize = 0x28;
+const IPC_CLEAR_OFF: usize = 0x2C;
+
+#[inline]
+fn ipc() -> MmioBlock {
+    unsafe { MmioBlock::new(IPC_BASE) }
+}
 
 pub const NUM_CHANNELS: usize = 15;
 
 // ── Global waker storage ──────────────────────────────────────────────────────
 
-/// One waker per IPC channel (IPC0–IPC14).
 static CHANNEL_WAKERS: [AtomicWaker; NUM_CHANNELS] = {
-    // const-init array of AtomicWaker
     [
-        AtomicWaker::new(),
-        AtomicWaker::new(),
-        AtomicWaker::new(),
-        AtomicWaker::new(),
-        AtomicWaker::new(),
-        AtomicWaker::new(),
-        AtomicWaker::new(),
-        AtomicWaker::new(),
-        AtomicWaker::new(),
-        AtomicWaker::new(),
-        AtomicWaker::new(),
-        AtomicWaker::new(),
-        AtomicWaker::new(),
-        AtomicWaker::new(),
-        AtomicWaker::new(),
+        AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
+        AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
+        AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
+        AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
+        AtomicWaker::new(), AtomicWaker::new(), AtomicWaker::new(),
     ]
 };
 
-/// Bitmask of channels that have fired (set by ISR, read by futures).
-/// Each bit N = channel N received a CA7 doorbell.
 static PENDING: Mutex<Cell<u32>> = Mutex::new(Cell::new(0));
 
 // ── Channel newtype ───────────────────────────────────────────────────────────
@@ -88,7 +80,6 @@ impl Channel {
         Self(n)
     }
 
-    /// Return the channel number.
     pub const fn number(self) -> u8 {
         self.0
     }
@@ -96,11 +87,9 @@ impl Channel {
 
 // ── Error type ────────────────────────────────────────────────────────────────
 
-/// Error returned by [`send`].
 #[derive(Debug, Copy, Clone)]
 pub enum IpcError {
-    /// The channel is already pending (CA7 has not yet acknowledged the
-    /// previous send, or another pending CA7→CM3 bell uses this bit).
+    /// The channel is already pending (CA7 has not yet acknowledged).
     Busy,
 }
 
@@ -111,45 +100,64 @@ pub enum IpcError {
 /// Returns `Err(IpcError::Busy)` if the channel is already pending.
 pub fn send(channel: Channel) -> Result<(), IpcError> {
     let mask = 1u32 << channel.0;
-    // SAFETY: volatile read/write of IPC MMIO.
-    let status = unsafe { ptr::read_volatile(IPC_STATUS) };
-    if status & mask != 0 {
+    if ipc().read32(IPC_STATUS_OFF) & mask != 0 {
         return Err(IpcError::Busy);
     }
-    unsafe { ptr::write_volatile(IPC_TRIG, mask) };
+    let mut ipc = ipc();
+    ipc.write32(IPC_TRIG_OFF, mask);
     Ok(())
 }
 
 /// Ring the doorbell on `channel` and busy-wait until the CA7 acknowledges.
 ///
-/// If the channel is already pending (e.g. a previous send was not yet
-/// acknowledged, or a CA7→CM3 bell on the same channel is outstanding),
-/// waits for it to clear before asserting the new trigger.
+/// Spins on STATUS until the channel bit clears, sends TRIG, then spins again
+/// until the CA7 clears the ack bit.
 pub fn send_wait(channel: Channel) {
     let mask = 1u32 << channel.0;
-    // SAFETY: IPC MMIO access.
-    unsafe {
-        // Wait for any in-flight state on this channel to clear first.
-        // Writing TRIG while STATUS[n] is already set has undefined hardware
-        // behaviour; send() already guards against this with Busy, so we
-        // mirror that here.
-        while ptr::read_volatile(IPC_STATUS) & mask != 0 {
-            core::hint::spin_loop();
-        }
-        ptr::write_volatile(IPC_TRIG, mask);
-        // Now wait for the CA7 to acknowledge (STATUS[n] goes back to 0).
-        while ptr::read_volatile(IPC_STATUS) & mask != 0 {
-            core::hint::spin_loop();
-        }
+    let ipc = ipc();
+    while ipc.read32(IPC_STATUS_OFF) & mask != 0 {
+        core::hint::spin_loop();
     }
+    let mut ipc_w = ipc;
+    ipc_w.write32(IPC_TRIG_OFF, mask);
+    while ipc_w.read32(IPC_STATUS_OFF) & mask != 0 {
+        core::hint::spin_loop();
+    }
+}
+
+/// Ring the doorbell on `channel` and yield until the CA7 acknowledges.
+///
+/// Yields to the Embassy executor between polls instead of busy-waiting,
+/// allowing other tasks to run while waiting for CA7 acknowledgement.
+#[cfg(any(feature = "ast2700-bootmcu", feature = "ast2600-ssp", feature = "ast1060"))]
+pub async fn send_wait_async(channel: Channel) {
+    use embassy_time::Duration;
+    const POLL_INTERVAL: Duration = Duration::from_micros(10);
+    const TIMEOUT: Duration = Duration::from_millis(500);
+
+    let mask = 1u32 << channel.0;
+
+    let _ = aspeed_mmio::poll_until_async(
+        || ipc().read32(IPC_STATUS_OFF),
+        |s| s & mask == 0,
+        POLL_INTERVAL,
+        TIMEOUT,
+    ).await;
+
+    let mut ipc_w = ipc();
+    ipc_w.write32(IPC_TRIG_OFF, mask);
+
+    let _ = aspeed_mmio::poll_until_async(
+        || ipc().read32(IPC_STATUS_OFF),
+        |s| s & mask == 0,
+        POLL_INTERVAL,
+        TIMEOUT,
+    ).await;
 }
 
 // ── Receive ───────────────────────────────────────────────────────────────────
 
 /// Wait for any CA7→CM3 IPC doorbell and return the triggered channel.
-///
-/// If multiple channels are pending at once, the lowest-numbered one is
-/// returned first.
 pub fn recv() -> RecvAny {
     RecvAny
 }
@@ -169,18 +177,15 @@ impl Future for RecvAny {
         let pending = critical_section::with(|cs| PENDING.borrow(cs).get());
         if pending != 0 {
             let n = pending.trailing_zeros() as u8;
-            // Clear only this channel's bit.
             critical_section::with(|cs| {
                 let cell = PENDING.borrow(cs);
                 cell.set(cell.get() & !(1u32 << n));
             });
             return Poll::Ready(Channel(n));
         }
-        // Register wakers on all channels.
         for w in &CHANNEL_WAKERS {
             w.register(cx.waker());
         }
-        // Re-check after registering.
         let pending = critical_section::with(|cs| PENDING.borrow(cs).get());
         if pending != 0 {
             let n = pending.trailing_zeros() as u8;
@@ -229,14 +234,17 @@ impl Future for RecvChannel {
 
 /// Called from each IPC interrupt handler with the channel index that fired.
 pub(crate) fn on_interrupt(ch: u8) {
-    // Read and clear the status bit for this channel.
-    // SAFETY: volatile read/write in ISR; single-core.
     let mask = 1u32 << ch;
-    unsafe {
-        let status = ptr::read_volatile(IPC_STATUS);
-        ptr::write_volatile(IPC_CLEAR, status & mask);
+    let status = ipc().read32(IPC_STATUS_OFF);
+    // Only acknowledge and wake if the status bit is actually set.
+    // Spurious interrupt entries (status already cleared) must not produce
+    // ghost messages in PENDING, which would cause RecvAny/RecvChannel to
+    // deliver a receive event with no actual data.
+    if status & mask == 0 {
+        return;
     }
-    // Mark the channel as pending and wake any waiting futures.
+    let mut ipc_w = ipc();
+    ipc_w.write32(IPC_CLEAR_OFF, mask);
     critical_section::with(|cs| {
         let cell = PENDING.borrow(cs);
         cell.set(cell.get() | mask);

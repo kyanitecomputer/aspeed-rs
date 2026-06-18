@@ -128,7 +128,11 @@ pub fn init() {
 /// ```
 pub fn reinit(hclk_hz: u32) {
     let raw = (hclk_hz as u64 / TICK_HZ - 1) as u32;
-    let reload = if raw < MIN_SYSTICK_RELOAD { MIN_SYSTICK_RELOAD } else { raw };
+    let reload = if raw < MIN_SYSTICK_RELOAD {
+        MIN_SYSTICK_RELOAD
+    } else {
+        raw
+    };
     systick_configure(reload);
 }
 
@@ -138,17 +142,24 @@ fn compute_reload() -> u32 {
     // CA7 configures HCLK = 200 MHz before releasing the SSP.
     // No SCU read needed — the value is fixed.
     let raw = (200_000_000u64 / TICK_HZ - 1) as u32;
-    if raw < MIN_SYSTICK_RELOAD { MIN_SYSTICK_RELOAD } else { raw }
+    if raw < MIN_SYSTICK_RELOAD {
+        MIN_SYSTICK_RELOAD
+    } else {
+        raw
+    }
 }
 
 #[cfg(feature = "ast1060")]
 fn compute_reload() -> u32 {
     use crate::clock::ast1060_clk;
-    use core::ptr;
+    use aspeed_mmio::MmioBlock;
+
+    const SCU_BASE: usize = 0x7E6E_2000;
 
     // Read actual HPLL and PCLK divider from SCU registers.
-    let hpll_reg = unsafe { ptr::read_volatile(ast1060_clk::HPLL_PARAM) };
-    let clk_sel4 = unsafe { ptr::read_volatile(ast1060_clk::CLK_SEL4) };
+    let scu = unsafe { MmioBlock::new(SCU_BASE) };
+    let hpll_reg = scu.read32(ast1060_clk::HPLL_PARAM);
+    let clk_sel4 = scu.read32(ast1060_clk::CLK_SEL4);
     let hpll_hz = ast1060_clk::hpll_from_reg(hpll_reg);
     let pclk_hz = if hpll_hz == 0 {
         // PLL powered down — fall back to crystal input.
@@ -158,7 +169,11 @@ fn compute_reload() -> u32 {
     };
 
     let raw = (pclk_hz as u64 / TICK_HZ).saturating_sub(1) as u32;
-    if raw < MIN_SYSTICK_RELOAD { MIN_SYSTICK_RELOAD } else { raw }
+    if raw < MIN_SYSTICK_RELOAD {
+        MIN_SYSTICK_RELOAD
+    } else {
+        raw
+    }
 }
 
 fn systick_configure(reload: u32) {

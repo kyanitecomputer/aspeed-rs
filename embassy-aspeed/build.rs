@@ -3,7 +3,7 @@
 //! Responsibilities:
 //!   1. Select the correct linker memory layout for the target chip.
 //!   2. Copy the selected layout file to `OUT_DIR/memory.x` so that
-//!      cortex-m-rt can find and `INCLUDE` it (see cortex-m-rt's link.x).
+//!      cortex-m-rt / riscv-rt can find and `INCLUDE` it.
 //!   3. Add `OUT_DIR` to the linker search path.
 //!   4. Re-run when any layout file or this script changes.
 
@@ -28,7 +28,13 @@ fn main() {
     } else if env::var("CARGO_FEATURE_AST1060").is_ok() {
         "link/ast1060.x"
     } else if env::var("CARGO_FEATURE_AST2700_BOOTMCU").is_ok() {
-        "link/ast2700-bootmcu.x"
+        // A2 moves the FMC load base to 0x14B80000 (A1 uses 0x14B80A00). Select
+        // the A2 layout when AST2700_BOOTMCU_A2 is set in the environment.
+        if env::var("AST2700_BOOTMCU_A2").is_ok() {
+            "link/ast2700-bootmcu-a2.x"
+        } else {
+            "link/ast2700-bootmcu.x"
+        }
     } else {
         // No chip feature selected — lib.rs will also emit a compile_error!.
         panic!(
@@ -38,16 +44,16 @@ fn main() {
     };
 
     // Copy the layout file to OUT_DIR/memory.x.
-    // cortex-m-rt's link.x starts with `INCLUDE memory.x`.
     let dest = out_dir.join("memory.x");
     fs::copy(layout_src, &dest)
         .unwrap_or_else(|e| panic!("failed to copy {} → {}: {}", layout_src, dest.display(), e));
 
-    // Make OUT_DIR a linker search directory so `memory.x` is found.
+    // Make OUT_DIR a linker search directory so memory.x is found.
     println!("cargo:rustc-link-search={}", out_dir.display());
 
     // Re-run the build script if the layout file or this script change.
     println!("cargo:rerun-if-changed={}", layout_src);
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=link/");
+    println!("cargo:rerun-if-env-changed=AST2700_BOOTMCU_A2");
 }

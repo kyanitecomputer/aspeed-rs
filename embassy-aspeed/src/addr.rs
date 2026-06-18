@@ -24,13 +24,14 @@
 //! `phys_base()` reads `SCUA04` once and caches the result in a static.
 //! Subsequent calls return the cached value without MMIO access.
 
-use core::ptr;
 use core::sync::atomic::{AtomicU32, Ordering};
+
+use aspeed_mmio::MmioBlock;
 
 // ── SSP control register ──────────────────────────────────────────────────────
 
 /// SSP `MEM_BASE` register address (SCUA04, CM3 view).
-const SCUA04: *const u32 = 0x7E6E_2A04 as *const u32;
+const SCUA04: usize = 0x7E6E_2A04;
 
 /// Sentinel meaning "not yet initialised".
 const UNSET: u32 = u32::MAX;
@@ -48,8 +49,7 @@ pub fn phys_base() -> u32 {
     if cached != UNSET {
         return cached;
     }
-    // SAFETY: MMIO read from the SSP coprocessor control register.
-    let raw = unsafe { ptr::read_volatile(SCUA04) };
+    let raw = unsafe { MmioBlock::new(SCUA04) }.read32(0);
     // BASE field is bits [31:20]; shift left by 0 — the register already
     // stores the address aligned to 1 MB (bits [31:20] << 20 gives the address,
     // but the field value itself is bits [31:20] of the address, so we mask

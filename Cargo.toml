@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "aspeed-mmio",
     "embassy-aspeed",
 ]
 resolver = "2"

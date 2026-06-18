@@ -40,26 +40,36 @@
 //! clock_enable(ClockGate::HaceYclk);  // AST1060
 //! ```
 
-use core::ptr;
+#[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
+use aspeed_mmio::MmioBlock;
 
 // ── Shared register addresses (SCU base 0x7E6E_2000 on both chips) ────────────
 
+#[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
 const SCU_BASE: usize = 0x7E6E_2000;
 
-const CLK_STOP0_SET: *mut u32 = (SCU_BASE + 0x080) as *mut u32;
-const CLK_STOP0_CLR: *mut u32 = (SCU_BASE + 0x084) as *mut u32;
-const CLK_STOP1_SET: *mut u32 = (SCU_BASE + 0x090) as *mut u32;
-const CLK_STOP1_CLR: *mut u32 = (SCU_BASE + 0x094) as *mut u32;
+#[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
+const CLK_STOP0_SET: usize = 0x080;
+#[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
+const CLK_STOP0_CLR: usize = 0x084;
+#[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
+const CLK_STOP1_SET: usize = 0x090;
+#[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
+const CLK_STOP1_CLR: usize = 0x094;
+
+#[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
+#[inline(always)]
+fn scu() -> MmioBlock {
+    unsafe { MmioBlock::new(SCU_BASE) }
+}
 
 // ── AST2600 SSP ───────────────────────────────────────────────────────────────
 
 #[cfg(feature = "ast2600-ssp")]
 mod ast2600_clk {
-    use super::*;
-
-    pub const APLL_PARAM: *const u32 = (SCU_BASE + 0x210) as *const u32;
-    pub const CLK_SEL0: *const u32 = (SCU_BASE + 0x300) as *const u32;
-    pub const CLK_SEL4: *const u32 = (SCU_BASE + 0x310) as *const u32;
+    pub const APLL_PARAM: usize = 0x210;
+    pub const CLK_SEL0: usize = 0x300;
+    pub const CLK_SEL4: usize = 0x310;
 
     /// Oscillator input frequency (25 MHz).
     pub const CLKIN_HZ: u32 = 25_000_000;
@@ -161,13 +171,13 @@ pub fn get_rate(id: ClockId) -> u32 {
         ClockId::UART => UART_CLK_HZ,
         ClockId::APB1 => {
             // APB1 = HPLL / ((APB1_DIV + 1) * 4); APB1_DIV = CLK_SEL0[25:23].
-            let reg = unsafe { ptr::read_volatile(CLK_SEL0) };
+            let reg = scu().read32(CLK_SEL0);
             let div = ((reg >> 23) & 0x7) as u32;
             HPLL_HZ / ((div + 1) * 4)
         }
         ClockId::APB2 => {
             // APB2 = HCLK / ((APB2_DIV + 1) * 2); APB2_DIV = CLK_SEL4[11:9].
-            let reg = unsafe { ptr::read_volatile(CLK_SEL4) };
+            let reg = scu().read32(CLK_SEL4);
             let div = ((reg >> 9) & 0x7) as u32;
             HCLK_HZ / ((div + 1) * 2)
         }
@@ -178,7 +188,7 @@ pub fn get_rate(id: ClockId) -> u32 {
 #[cfg(feature = "ast2600-ssp")]
 pub fn apll_hz() -> u32 {
     use ast2600_clk::*;
-    let reg = unsafe { ptr::read_volatile(APLL_PARAM) };
+    let reg = scu().read32(APLL_PARAM);
     if reg & (1 << 24) != 0 {
         CLKIN_HZ // bypass
     } else {
@@ -205,16 +215,14 @@ pub const UART_CLK_HZ: u32 = 24_000_000 / 13; // placeholder for host test build
 
 #[cfg(feature = "ast1060")]
 pub(crate) mod ast1060_clk {
-    use super::SCU_BASE;
-
     /// H-PLL parameter register (SCU200).
     /// FreqOut = 25 MHz × (M+1) / (N+1) / (P+1).
     /// Default: M=0x77(119), N=2, P=0 → 1000 MHz.
-    pub const HPLL_PARAM: *const u32 = (SCU_BASE + 0x200) as *const u32;
+    pub const HPLL_PARAM: usize = 0x200;
 
     /// Clock selection register 4 (SCU310).
     /// [11:8] = PCLK divider, [4] = UART5 clock source.
-    pub const CLK_SEL4: *const u32 = (SCU_BASE + 0x310) as *const u32;
+    pub const CLK_SEL4: usize = 0x310;
 
     /// Crystal oscillator input (25 MHz).
     pub const CLKIN_HZ: u32 = 25_000_000;
@@ -307,16 +315,16 @@ pub fn get_rate(id: ClockId) -> u32 {
     use ast1060_clk::*;
     match id {
         ClockId::Hpll => {
-            let reg = unsafe { ptr::read_volatile(HPLL_PARAM) };
+            let reg = scu().read32(HPLL_PARAM);
             hpll_from_reg(reg)
         }
         ClockId::Pclk => {
             let hpll = get_rate(ClockId::Hpll);
-            let sel = unsafe { ptr::read_volatile(CLK_SEL4) };
+            let sel = scu().read32(CLK_SEL4);
             pclk_from_hpll_and_reg(hpll, sel)
         }
         ClockId::Uart5 => {
-            let sel = unsafe { ptr::read_volatile(CLK_SEL4) };
+            let sel = scu().read32(CLK_SEL4);
             if sel & (1 << 4) == 0 {
                 UART5_CLK_24M_HZ
             } else {
@@ -326,7 +334,7 @@ pub fn get_rate(id: ClockId) -> u32 {
         ClockId::I3c => {
             // I3C = HPLL / (2 × (SCU310[30:28] + 1)); default [30:28]=4 → ÷10.
             let hpll = get_rate(ClockId::Hpll);
-            let sel = unsafe { ptr::read_volatile(CLK_SEL4) };
+            let sel = scu().read32(CLK_SEL4);
             let div = ((sel >> 28) & 0x7) as u32;
             hpll / (2 * (div + 1))
         }
@@ -341,9 +349,8 @@ pub fn get_rate(id: ClockId) -> u32 {
 #[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
 pub fn clock_enable(gate: ClockGate) {
     let (clr, bit) = gate_reg_bit(gate);
-    if !clr.is_null() {
-        // SAFETY: raw write to well-documented SCU hardware register.
-        unsafe { ptr::write_volatile(clr, 1 << bit) };
+    if let Some(clr) = clr {
+        scu().write32(clr, 1 << bit);
     }
 }
 
@@ -362,20 +369,19 @@ pub fn clock_disable(gate: ClockGate) {
     } else {
         return;
     };
-    // SAFETY: raw write to well-documented SCU hardware register.
-    unsafe { ptr::write_volatile(set, 1 << bit) };
+    scu().write32(set, 1 << bit);
 }
 
-/// Returns `(clr_reg_ptr, bit_index)` for a given gate.
+/// Returns `(clr_reg_offset, bit_index)` for a given gate.
 #[cfg(any(feature = "ast2600-ssp", feature = "ast1060"))]
-fn gate_reg_bit(gate: ClockGate) -> (*mut u32, u32) {
+fn gate_reg_bit(gate: ClockGate) -> (Option<usize>, u32) {
     let v = gate as u8 as u32;
     if v < 32 {
-        (CLK_STOP0_CLR, v)
+        (Some(CLK_STOP0_CLR), v)
     } else if v < 64 {
-        (CLK_STOP1_CLR, v - 32)
+        (Some(CLK_STOP1_CLR), v - 32)
     } else {
-        (core::ptr::null_mut(), 0)
+        (None, 0)
     }
 }
 

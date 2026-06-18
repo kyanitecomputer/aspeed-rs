@@ -1,4 +1,5 @@
 //! ADC driver for AST1060 (1 bank, 8 channels) and AST2600 SSP (2 banks × 8 channels).
+#![allow(dead_code)]
 //!
 //! # Hardware
 //!
@@ -29,7 +30,7 @@
 //! `Adc::new` powers up the engine, enables all requested channels, and waits
 //! for `INIT_RDY` (hardware calibration complete).  The init timeout is
 //! 500 ms; [`AdcError::Timeout`] is returned if the engine does not become
-//! ready in time.  All registers are accessed using volatile MMIO; no DMA.
+//! ready in time.  All registers are accessed using `MmioBlock`; no DMA.
 //!
 //! # Clock
 //!
@@ -37,7 +38,7 @@
 //! default gives a sample rate of approximately 65 kHz from PCLK.  Use
 //! [`Adc::set_clock_div`] to adjust for a specific PCLK frequency if needed.
 
-use core::ptr;
+use aspeed_mmio::{poll_until, MmioBlock};
 
 // ── Base addresses ────────────────────────────────────────────────────────────
 
@@ -67,7 +68,7 @@ const COMP_TRIM: usize = 0xC4;
 // ── ENGINE_CTRL bit fields ────────────────────────────────────────────────────
 
 const ENGINE_EN: u32 = 1 << 0;
-const OP_MODE_NORMAL: u32 = 7 << 1;  // continuous scan
+const OP_MODE_NORMAL: u32 = 7 << 1; // continuous scan
 const OP_MODE_MASK: u32 = 7 << 1;
 const CTRL_COMPENSATION: u32 = 1 << 4;
 const AUTO_COMPENSATION: u32 = 1 << 5;
@@ -149,23 +150,18 @@ impl Adc {
             | AUTO_COMPENSATION
             | (vref.encoding() << REF_VOLTAGE_SHIFT)
             | (0xFF << CH_EN_SHIFT);
-        unsafe { ptr::write_volatile(adc.reg32(ENGINE_CTRL), ctrl) };
+        let mut regs = adc.regs();
+        regs.write32(ENGINE_CTRL, ctrl);
 
         // Wait for hardware calibration to complete (INIT_RDY = bit 8).
         // Poll up to ~500 ms.  Cortex-M at 25 MHz: ~500 cycles per µs → 250 M cycles.
         const MAX_POLLS: u32 = 250_000_000;
-        let mut n = 0u32;
-        loop {
-            let v = unsafe { ptr::read_volatile(adc.reg32(ENGINE_CTRL)) };
-            if v & CTRL_INIT_RDY != 0 {
-                break;
-            }
-            n += 1;
-            if n > MAX_POLLS {
-                return Err(AdcError::Timeout);
-            }
-            core::hint::spin_loop();
-        }
+        poll_until(
+            || adc.regs().read32(ENGINE_CTRL),
+            |v| v & CTRL_INIT_RDY != 0,
+            MAX_POLLS,
+        )
+        .map_err(|_| AdcError::Timeout)?;
 
         Ok(adc)
     }
@@ -186,7 +182,7 @@ impl Adc {
 
         let off = CH_DATA_BASE + ch as usize * 2;
         // Channel registers are 16-bit; result is in bits [9:0].
-        let raw = unsafe { ptr::read_volatile((self.base + off) as *const u16) };
+        let raw = self.regs().read16(off);
         Ok(raw & 0x3FF)
     }
 
@@ -199,7 +195,7 @@ impl Adc {
     ///
     /// Call after `Adc::new` if the default ~65 kHz rate is not suitable.
     pub fn set_clock_div(&self, div: u16) {
-        unsafe { ptr::write_volatile(self.reg32(CLK_CTRL), div as u32) };
+        self.regs().write32(CLK_CTRL, div as u32);
     }
 
     /// Enable or disable individual channels via a bitmask (bit N = channel N).
@@ -209,20 +205,20 @@ impl Adc {
     ///
     /// This overwrites the channel-enable field.  Pass `0xFF` to re-enable all.
     pub fn set_channel_mask(&self, mask: u8) {
-        let ctrl = unsafe { ptr::read_volatile(self.reg32(ENGINE_CTRL)) };
+        let ctrl = self.regs().read32(ENGINE_CTRL);
         let new = (ctrl & !(0xFF << CH_EN_SHIFT)) | ((mask as u32) << CH_EN_SHIFT);
-        unsafe { ptr::write_volatile(self.reg32(ENGINE_CTRL), new) };
+        self.regs().write32(ENGINE_CTRL, new);
     }
 
     /// Power down the ADC bank.
     pub fn shutdown(&self) {
         // OP_MODE = 0 (power-down) + ENGINE_EN = 0.
-        unsafe { ptr::write_volatile(self.reg32(ENGINE_CTRL), 0) };
+        self.regs().write32(ENGINE_CTRL, 0);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    fn reg32(&self, byte_offset: usize) -> *mut u32 {
-        (self.base + byte_offset) as *mut u32
+    fn regs(&self) -> MmioBlock {
+        unsafe { MmioBlock::new(self.base) }
     }
 }

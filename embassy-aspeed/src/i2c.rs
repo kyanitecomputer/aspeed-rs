@@ -1,66 +1,33 @@
-//! I2C/SMBus master driver (AST1060 14-channel / AST2600-SSP 16-channel).
-#![allow(dead_code)]
+//! I2C/SMBus master driver — PAC-based, async ISR-driven.
 //!
-//! Uses **new register mode** (I2CG0C[2]=1) with pool-buffer transfer mode.
-//! DMA and slave mode are not implemented.
+//! Sources of truth:
+//! - `aspeed-data/data/registers/i2c_v1.yaml`  (per-channel registers)
+//! - `aspeed-data/data/registers/i2cglobal_v1.yaml` (global control)
+//! - `aspeed-data/data/registers/i2cbuff_v1.yaml` (pool-buffer SRAM)
 //!
-//! # Hardware setup — AST1060
+//! # Hardware instances (AST1060)
 //!
-//! | Channel N | Base address | IRQ |
-//! |-----------|-------------|-----|
-//! | 0 | 0x7E7B_0080 | 110 |
-//! | … | … | … |
-//! | 13 | 0x7E7B_0700 | 123 |
+//! | Channel | PAC | Base | IRQ |
+//! |---------|-----|------|-----|
+//! | 0 | `pac::I2C0` | `0x7E7B_0080` | 110 |
+//! | … | … | … | … |
+//! | 13 | `pac::I2C13` | `0x7E7B_0700` | 123 |
 //!
-//! Global: `0x7E7B_0000`.  Pool SRAM: `0x7E7B_0C00 + N * 0x20`.
+//! Global: `pac::I2C_GLOBAL` at `0x7E7B_0000`.
+//! Pool SRAM: `0x7E7B_0C00 + N * 0x20` (32 bytes per channel, raw SRAM).
 //!
-//! # Hardware setup — AST2600 SSP
+//! # Mode
 //!
-//! | Channel N | Base address | IRQ |
-//! |-----------|-------------|-----|
-//! | 0 | 0x7E78_A080 | 110 |
-//! | … | … | … |
-//! | 15 | 0x7E78_A880 | 125 |
+//! New register mode (`I2CGLOBAL.CTRL.NEW_REG_MODE=1`) with pool-buffer transfer
+//! (max 16 bytes per phase in split mode: lower 16 B TX, upper 16 B RX).
 //!
-//! Global: `0x7E78_A000`.  Pool SRAM: `0x7E78_AC00 + N * 0x20`.
+//! # Async model
 //!
-//! # Note on pool SRAM address (AST2600)
-//!
-//! The pool SRAM base `0x7E78_AC00` is inferred from the same +0xC00 offset
-//! used on AST1060; the AST2600 datasheet confirms the pool buffer feature
-//! exists but does not explicitly state the SRAM address in the sections
-//! surveyed.  **Verify on hardware before relying on pool-buffer mode.**
-//! If pool SRAM is absent or at a different offset, switch to byte mode
-//! (I2CC08) for AST2600.
-//!
-//! # Clock timing (AST2600 SSP)
-//!
-//! `I2cConfig::default()` uses `CLK_100KHZ` which was calibrated for
-//! AST1060 at 500 MHz PCLK.  AST2600 SSP HCLK = 200 MHz; the effective
-//! PCLK may differ.  Compute the correct `clk_timing` value for the target
-//! PCLK and pass it to `I2cConfig { clk_timing: ... }` until hardware
-//! calibration is done.
-//!
-//! # Initialisation sequence
-//!
-//! 1. Enable new register mode (`I2CG0C[2]=1`) and new clock divider
-//!    mode (`I2CG0C[1]=1`).
-//! 2. Configure per-channel AC timing in `I2CC04`.
-//! 3. Enable master function (`I2CC00[0]=1`).
-//!
-//! # Transfer model (pool buffer)
-//!
-//! **Write:** Load target address and data into MASTER_CMD and pool buffer,
-//! trigger `MASTER_START_CMD`, wait for `PKT_CMD_DONE_STS` interrupt.
-//!
-//! **Read:** Configure pool buffer for RX, trigger master start with
-//! `ENBL_MASTER_PKT_OP`, wait for done interrupt.
-//!
-//! # Clock configuration
-//!
-//! Default (new clock divider mode, SCU310[11:8]=0, PCLK=500 MHz after PLL):
-//! - Base clock: 0100 = 1 MHz `baseclk4`
-//! - tCKLow = tCKHigh = 5 → SCL = 1 MHz / (5+5) = **100 kHz (Standard Mode)**
+//! - `start_write` / `start_read`: configure pool buffer and issue `MASTER_CMD`,
+//!   return immediately.
+//! - `wait_done()` → `WaitDoneFuture`: registers `AtomicWaker`, yields until
+//!   `MASTER_IRQ_STATUS.PKT_CMD_DONE_STS` fires.
+//! - Per-channel ISR (I2C0–I2C13): calls `on_interrupt(ch)` → wakes the waker.
 //!
 //! # Usage
 //!
@@ -68,287 +35,295 @@
 //! use embassy_aspeed::i2c::{I2cBus, I2cConfig};
 //! use embedded_hal_async::i2c::I2c;
 //!
-//! let mut bus = I2cBus::new(0, I2cConfig::default()); // channel 0
+//! let mut bus = I2cBus::new(0, I2cConfig::default());
 //! let mut buf = [0u8; 2];
 //! bus.write_read(0x50, &[0x00], &mut buf).await.unwrap();
 //! ```
 
-use core::ptr;
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
+use aspeed_mmio::MmioBlock;
 use embassy_sync::waitqueue::AtomicWaker;
 use embedded_hal_async::i2c::{I2c, Operation};
 
-// ── Base addresses ────────────────────────────────────────────────────────────
+use crate::pac;
 
-#[cfg(feature = "ast1060")]
-const I2C_GLOBAL_BASE: usize = 0x7E7B_0000;
-#[cfg(feature = "ast1060")]
-const I2C_CH_BASE: usize = 0x7E7B_0080;
+// ── Pool-buffer SRAM constants ────────────────────────────────────────────────
+// i2cbuff_v1.yaml: per-channel pool SRAM at base+0xC00, stride 0x20 (32 bytes).
+// Lower 16 bytes = TX, upper 16 bytes = RX when POOL_CTRL.BUF_ORGANIZATION=1.
+
 #[cfg(feature = "ast1060")]
 const I2C_BUF_BASE: usize = 0x7E7B_0C00;
-
-// AST2600 SSP: I2C bus controller at 0x7E78_A000 (BMC: 0x1E78_A000).
-// Pool SRAM assumed at base+0xC00 — same layout as AST1060. See module note.
-#[cfg(feature = "ast2600-ssp")]
-const I2C_GLOBAL_BASE: usize = 0x7E78_A000;
-#[cfg(feature = "ast2600-ssp")]
-const I2C_CH_BASE: usize = 0x7E78_A080;
 #[cfg(feature = "ast2600-ssp")]
 const I2C_BUF_BASE: usize = 0x7E78_AC00;
-
-const I2C_CH_STRIDE: usize = 0x80;
 const I2C_BUF_STRIDE: usize = 0x20;
 
-// ── Global register offsets (word index) ─────────────────────────────────────
+/// Maximum bytes per pool-buffer phase in split mode (16 TX + 16 RX).
+const POOL_MAX: usize = 16;
 
-const G_CTRL: usize = 0x0C / 4; // I2CG0C — global control
-
-// ── Per-channel register offsets (word index from channel base) ───────────────
-
-const C_FUNC_CTRL: usize = 0x00 / 4; // I2CC00
-const C_CLK_TIMING: usize = 0x04 / 4; // I2CC04
-const C_TX_RX_BUF: usize = 0x08 / 4; // I2CC08 (status + byte buf)
-const C_POOL_CTRL: usize = 0x0C / 4; // I2CC0C
-const M_IRQ_CTRL: usize = 0x10 / 4; // I2CM10
-const M_IRQ_STATUS: usize = 0x14 / 4; // I2CM14
-const M_CMD: usize = 0x18 / 4; // I2CM18
-
-// ── Register bit definitions ──────────────────────────────────────────────────
-
-// I2CG0C bits
-const G_CLK_DIV_MODE: u32 = 1 << 1; // new clock divider mode
-const G_REG_MODE: u32 = 1 << 2; // new register mode
-
-// I2CC00 (FUNC_CTRL) bits
-const FUNC_MASTER_EN: u32 = 1 << 0;
-
-// I2CC04 (CLK_TIMING) fields
-// New mode, baseclk4 = 1 MHz (BASE_CLK_DIV=0b0100), tCKLow=tCKHigh=5
-// → 100 kHz Standard Mode
-const CLK_100KHZ: u32 = (0b0100) | (5 << 12) | (5 << 16); // BASE=4, LCNT=5, HCNT=5
-
-// I2CC0C (POOL_CTRL) — split: lower 16 B TX, upper 16 B RX
-const POOL_SPLIT: u32 = 1 << 0;
-
-// I2CM10 (MASTER_IRQ_CTRL)
-const M_IRQ_PKT_DONE: u32 = 1 << 16;
-const M_IRQ_SMBUS_ALERT: u32 = 1 << 12;
-
-// I2CM14 (MASTER_IRQ_STATUS) — write-1-to-clear
-const M_STS_PKT_DONE: u32 = 1 << 16;
-const M_STS_PKT_FAIL: u32 = 1 << 17;
-const M_STS_ARB_LOSS: u32 = 1 << 3;
-const M_STS_NACK: u32 = 1 << 1;
-
-// I2CM18 (MASTER_CMD)
-const M_CMD_START: u32 = 1 << 0;
-const M_CMD_TX: u32 = 1 << 1;
-const M_CMD_RX: u32 = 1 << 3;
-const M_CMD_RX_LAST: u32 = 1 << 4; // NACK after last byte
-const M_CMD_STOP: u32 = 1 << 5;
-const M_CMD_TX_POOL: u32 = 1 << 6;
-const M_CMD_RX_POOL: u32 = 1 << 7;
-const M_CMD_PKT_OP: u32 = 1 << 16;
-
-const M_CMD_TARGET_SHIFT: u32 = 24;
-
-// Pool buffer max size in bytes (32-byte SRAM, split → 16 TX + 16 RX)
-const POOL_MAX_BYTES: usize = 16;
-
-// ── Channel count ─────────────────────────────────────────────────────────────
+// ── Channel count ──────────────────────────────────────────────────────────────
 
 #[cfg(feature = "ast1060")]
-const N_CHANNELS: usize = 14;
+const N_CH: usize = 14;
 #[cfg(feature = "ast2600-ssp")]
-const N_CHANNELS: usize = 16;
+const N_CH: usize = 16;
 
-// ── Global wakers (one per channel) ──────────────────────────────────────────
+// ── Global wakers ──────────────────────────────────────────────────────────────
 
-static I2C_WAKERS: [AtomicWaker; N_CHANNELS] = {
+static I2C_WAKERS: [AtomicWaker; N_CH] = {
     const W: AtomicWaker = AtomicWaker::new();
     #[cfg(feature = "ast1060")]
-    { [W, W, W, W, W, W, W, W, W, W, W, W, W, W] }
+    {
+        [W, W, W, W, W, W, W, W, W, W, W, W, W, W]
+    }
     #[cfg(feature = "ast2600-ssp")]
-    { [W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W] }
+    {
+        [W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W]
+    }
 };
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
 /// I2C bus configuration.
 pub struct I2cConfig {
-    /// SCL frequency — see CLK_TIMING register for formula.
-    /// Default: standard mode (100 kHz) using 1 MHz base clock.
+    /// `CLK_TIMING` register value for the desired SCL frequency.
+    ///
+    /// Default: 100 kHz Standard Mode for AST1060 at 500 MHz PCLK.
+    /// Formula (new clock divider mode, from i2c_v1.yaml `I2C_CLK_TIMING`):
+    ///   `BASE_CLK_DIV=4` (1 MHz base), `TCKLOW=5`, `TCKIGH=5`
+    ///   → SCL = 1 MHz / (5+5) = 100 kHz
     pub clk_timing: u32,
 }
 
 impl Default for I2cConfig {
     fn default() -> Self {
-        Self {
-            clk_timing: CLK_100KHZ,
-        }
+        // BASE_CLK_DIV=4, TCKLOW=5, TCKIGH=5 (i2c_v1.yaml I2C_CLK_TIMING fieldset).
+        let mut t = pac::i2c_v1::I2C_CLK_TIMING(0);
+        t.set_BASE_CLK_DIV(4);
+        t.set_TCKLOW(5);
+        t.set_TCKIGH(5);
+        Self { clk_timing: t.0 }
     }
 }
 
 // ── I2cBus ────────────────────────────────────────────────────────────────────
 
 /// I2C master bus driver (single channel, pool-buffer mode).
-///
-/// Supports AST1060 (channels 0–13) and AST2600 SSP (channels 0–15).
 pub struct I2cBus {
     ch: u8,
 }
 
 impl I2cBus {
-    /// Initialise I2C channel `ch` with the given configuration.
+    /// Initialise I2C channel `ch` (0–13 on AST1060, 0–15 on AST2600 SSP).
     ///
-    /// AST1060: channels 0–13.  AST2600 SSP: channels 0–15.
-    /// Enables new register mode globally on first call (idempotent).
+    /// Enables new register mode globally and configures the channel.
     ///
     /// # Panics
     ///
-    /// Panics if `ch` ≥ `N_CHANNELS`.
+    /// Panics if `ch` ≥ channel count for this chip.
     pub fn new(ch: u8, cfg: I2cConfig) -> Self {
-        assert!((ch as usize) < N_CHANNELS, "I2C channel out of range");
+        assert!((ch as usize) < N_CH, "I2C channel out of range");
 
-        // Enable new register mode and new clock divider mode globally.
-        let gr = global_base();
-        let gctrl = unsafe { ptr::read_volatile(gr.add(G_CTRL)) };
-        unsafe { ptr::write_volatile(gr.add(G_CTRL), gctrl | G_REG_MODE | G_CLK_DIV_MODE) };
+        // Enable new register mode + new clock divider mode.
+        // i2cglobal_v1.yaml GLOBAL_CTRL: REG_MODE=bit2, CLK_DIVIDER_MODE=bit1.
+        pac::I2C_GLOBAL.GLOBAL_CTRL().modify(|w| {
+            w.set_REG_MODE(true);
+            w.set_CLK_DIVIDER_MODE(true);
+        });
 
-        // Configure channel.
-        let cr = ch_base(ch);
-        unsafe {
-            // Disable everything before config.
-            ptr::write_volatile(cr.add(C_FUNC_CTRL), 0);
-            // Set clock timing.
-            ptr::write_volatile(cr.add(C_CLK_TIMING), cfg.clk_timing);
+        with_ch(ch, |regs| {
+            // Disable channel before configuring (clearing ENBL_MASTER_FN resets state).
+            regs.FUNC_CTRL().write(|w| w.set_ENBL_MASTER_FN(false));
+
+            // Set SCL timing.
+            regs.CLK_TIMING().write(|w| {
+                w.0 = cfg.clk_timing;
+            });
+
             // Enable master function.
-            ptr::write_volatile(cr.add(C_FUNC_CTRL), FUNC_MASTER_EN);
-            // Enable packet-done interrupt.
-            ptr::write_volatile(cr.add(M_IRQ_CTRL), M_IRQ_PKT_DONE | M_IRQ_SMBUS_ALERT);
-        }
+            regs.FUNC_CTRL().write(|w| w.set_ENBL_MASTER_FN(true));
+
+            // Enable PKT_CMD_DONE interrupt (required for async WaitDoneFuture).
+            // i2c_v1.yaml: MASTER_IRQ_CTRL.ENBL_PKT_CMD_DONE_INT = bit16.
+            regs.MASTER_IRQ_CTRL().write(|w| {
+                w.set_ENBL_PKT_CMD_DONE_INT(true);
+                w.set_ENBL_SMBUS_ALERT_INT(true);
+            });
+        });
 
         Self { ch }
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
 
-    fn ch_regs(&self) -> *mut u32 {
-        ch_base(self.ch)
+    fn buf_regs(&self) -> MmioBlock {
+        unsafe { MmioBlock::new(I2C_BUF_BASE + self.ch as usize * I2C_BUF_STRIDE) }
     }
 
-    fn buf_base(&self) -> *mut u8 {
-        (I2C_BUF_BASE + self.ch as usize * I2C_BUF_STRIDE) as *mut u8
-    }
-
-    fn rr(&self, off: usize) -> u32 {
-        unsafe { ptr::read_volatile(self.ch_regs().add(off)) }
-    }
-
-    fn rw(&self, off: usize, val: u32) {
-        unsafe { ptr::write_volatile(self.ch_regs().add(off), val) }
+    /// Spin while BUS_BUSY (i2c_v1.yaml TX_RX_BUF.BUS_BUSY = bit16).
+    fn wait_bus_idle(&self) {
+        with_ch(self.ch, |r| {
+            while r.TX_RX_BUF().read().BUS_BUSY() {
+                core::hint::spin_loop();
+            }
+        });
     }
 
     fn clear_status(&self) {
-        // Write 1 to all W1C bits.
-        self.rw(M_IRQ_STATUS, 0xFFFF_FFFF);
+        // W1C: write all-ones to clear sticky status bits.
+        with_ch(self.ch, |r| {
+            r.MASTER_IRQ_STATUS().write(|w| {
+                w.0 = 0xFFFF_FFFF;
+            });
+        });
     }
 
-    fn wait_bus_idle(&self) {
-        // Bit[16] of I2CC08 = BUS_BUSY.
-        while self.rr(C_TX_RX_BUF) & (1 << 16) != 0 {}
-    }
+    // ── Non-blocking transfer initiation ──────────────────────────────────────
 
-    // ── Blocking transfer primitives ──────────────────────────────────────────
-
-    /// Blocking write: send `addr` (7-bit), then `data`.
-    fn blocking_write_inner(&mut self, addr: u8, data: &[u8]) -> Result<(), I2cError> {
-        let n = data.len().min(POOL_MAX_BYTES);
+    fn start_write(&mut self, addr: u8, data: &[u8]) {
+        let n = data.len().min(POOL_MAX);
         self.wait_bus_idle();
         self.clear_status();
 
-        // Load data into pool TX buffer.
-        let buf = self.buf_base();
+        // Write TX bytes into pool SRAM (lower 16 bytes).
+        let mut buf = self.buf_regs();
         for (i, &b) in data[..n].iter().enumerate() {
-            unsafe { ptr::write_volatile(buf.add(i), b) };
+            buf.write8(i, b);
         }
 
-        // Pool control: all 32 B for TX (no split), TX count = n-1.
-        let pool_ctrl = ((n.saturating_sub(1) as u32) << 8) & (0x1F << 8);
-        self.rw(C_POOL_CTRL, pool_ctrl);
+        with_ch(self.ch, |r| {
+            // POOL_CTRL: TX only (BUF_ORGANIZATION=0), TX_DATA_BYTE_COUNT = n-1.
+            // i2c_v1.yaml: POOL_CTRL.TX_DATA_BYTE_COUNT [12:8] = N+1 bytes encoded as N.
+            r.POOL_CTRL().write(|w| {
+                w.set_BUF_ORGANIZATION(false); // all 32 bytes for TX
+                w.set_TX_DATA_BYTE_COUNT((n.saturating_sub(1)) as u8);
+            });
 
-        // Issue packet-mode write: target addr + TX pool + start.
-        let cmd = M_CMD_TX_POOL | M_CMD_PKT_OP | ((addr as u32) << M_CMD_TARGET_SHIFT);
-        self.rw(M_CMD, cmd);
-
-        self.poll_done()
+            // Issue packet-mode write (i2c_v1.yaml MASTER_CMD fieldset).
+            r.MASTER_CMD().write(|w| {
+                w.set_ENBL_MASTER_TX_POOL(true);
+                w.set_ENBL_MASTER_PKT_OP(true);
+                w.set_TARGET_ADDR(addr & 0x7F);
+            });
+        });
     }
 
-    /// Blocking read: send `addr` (7-bit read), receive `buf.len()` bytes.
-    fn blocking_read_inner(&mut self, addr: u8, buf: &mut [u8]) -> Result<(), I2cError> {
-        let n = buf.len().min(POOL_MAX_BYTES);
+    fn start_read(&mut self, addr: u8, n: usize) {
         self.wait_bus_idle();
         self.clear_status();
 
-        // Pool control: RX count field = n-1 at bits [20:16].
-        // Note: M_CMD_RX_LAST (NACK after last byte) lives in M_CMD[4], not here.
-        // The `(1 << 4)` that was previously ORed in was a copy-paste from the
-        // M_CMD bit definitions and wrote an unrelated pool-ctrl field.
-        let pool_ctrl = ((n.saturating_sub(1) as u32) << 16) & (0x1F << 16);
-        self.rw(C_POOL_CTRL, pool_ctrl);
+        with_ch(self.ch, |r| {
+            // POOL_CTRL: RX_POOL_BUF_SIZE at bits[20:16] = n-1.
+            r.POOL_CTRL().write(|w| {
+                w.set_BUF_ORGANIZATION(false);
+                w.set_RX_POOL_BUF_SIZE((n.saturating_sub(1)) as u8);
+            });
 
-        // Issue packet-mode read.
-        let cmd =
-            M_CMD_RX_POOL | M_CMD_PKT_OP | M_CMD_RX_LAST | ((addr as u32) << M_CMD_TARGET_SHIFT);
-        self.rw(M_CMD, cmd | (1 << 28)); // RnW=1 for read
-
-        self.poll_done()?;
-
-        // Copy received bytes from pool buffer.
-        let rbuf = self.buf_base();
-        for (i, b) in buf[..n].iter_mut().enumerate() {
-            *b = unsafe { ptr::read_volatile(rbuf.add(i)) };
-        }
-        Ok(())
+            // Issue packet-mode read.
+            // Direction is determined by ENBL_MASTER_RX_POOL; TARGET_ADDR is 7-bit.
+            // i2c_v1.yaml: no separate RnW bit in packet mode — hardware derives it.
+            r.MASTER_CMD().write(|w| {
+                w.set_ENBL_MASTER_RX_POOL(true);
+                w.set_ENBL_MASTER_PKT_OP(true);
+                w.set_TARGET_ADDR(addr & 0x7F);
+            });
+        });
     }
 
-    fn poll_done(&self) -> Result<(), I2cError> {
-        // Spin-wait for packet done or fail. For async, use the waker in the future.
-        loop {
-            let sts = self.rr(M_IRQ_STATUS);
-            if sts & M_STS_PKT_DONE != 0 {
-                self.rw(M_IRQ_STATUS, M_STS_PKT_DONE);
-                if sts & M_STS_PKT_FAIL != 0 {
-                    return Err(I2cError::Nack);
-                }
-                return Ok(());
-            }
-            if sts & (M_STS_ARB_LOSS | M_STS_NACK) != 0 {
-                self.rw(M_IRQ_STATUS, 0xFFFF_FFFF);
-                return Err(I2cError::Nack);
-            }
-            core::hint::spin_loop();
+    fn read_pool_result(&self, buf: &mut [u8]) {
+        let rbuf = self.buf_regs();
+        for (i, slot) in buf.iter_mut().enumerate() {
+            *slot = rbuf.read8(i);
         }
     }
 
-    /// Called from ISR for channel `ch` (0-based).
+    /// Called from the per-channel ISR.
     pub(crate) fn on_interrupt(ch: u8) {
-        if (ch as usize) < N_CHANNELS {
+        if (ch as usize) < N_CH {
             I2C_WAKERS[ch as usize].wake();
+        }
+    }
+}
+
+// ── WaitDoneFuture ────────────────────────────────────────────────────────────
+
+/// Resolves when `MASTER_IRQ_STATUS.PKT_CMD_DONE_STS` fires for channel `ch`.
+///
+/// Registers `I2C_WAKERS[ch]` so the per-channel ISR can wake the task.
+struct WaitDoneFuture2 {
+    ch: u8,
+}
+
+impl Future for WaitDoneFuture2 {
+    type Output = Result<(), I2cError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let result = with_ch_result(self.ch, |r| {
+            let sts = r.MASTER_IRQ_STATUS().read();
+            if sts.PKT_CMD_DONE_STS() {
+                r.MASTER_IRQ_STATUS()
+                    .write(|w| w.set_PKT_CMD_DONE_STS(true));
+                return Some(if sts.PKT_CMD_FAIL_STS() {
+                    Err(I2cError::Nack)
+                } else {
+                    Ok(())
+                });
+            }
+            if sts.ARB_LOSS_STS() {
+                r.MASTER_IRQ_STATUS().write(|w| {
+                    w.0 = 0xFFFF_FFFF;
+                });
+                return Some(Err(I2cError::ArbitrationLoss));
+            }
+            None
+        });
+
+        if let Some(r) = result {
+            return Poll::Ready(r);
+        }
+
+        I2C_WAKERS[self.ch as usize].register(cx.waker());
+
+        // Re-check after registration.
+        let result2 = with_ch_result(self.ch, |r| {
+            let sts = r.MASTER_IRQ_STATUS().read();
+            if sts.PKT_CMD_DONE_STS() {
+                r.MASTER_IRQ_STATUS()
+                    .write(|w| w.set_PKT_CMD_DONE_STS(true));
+                return Some(if sts.PKT_CMD_FAIL_STS() {
+                    Err(I2cError::Nack)
+                } else {
+                    Ok(())
+                });
+            }
+            if sts.ARB_LOSS_STS() {
+                r.MASTER_IRQ_STATUS().write(|w| {
+                    w.0 = 0xFFFF_FFFF;
+                });
+                return Some(Err(I2cError::ArbitrationLoss));
+            }
+            None
+        });
+
+        match result2 {
+            Some(r) => Poll::Ready(r),
+            None => Poll::Pending,
         }
     }
 }
 
 // ── Error type ────────────────────────────────────────────────────────────────
 
-/// I2C error.
+/// I2C transfer error.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum I2cError {
     /// Device did not acknowledge (address or data NACK).
     Nack,
-    /// Arbitration lost (another master on the bus).
+    /// Arbitration lost.
     ArbitrationLoss,
-    /// Transfer too large for pool buffer (max 16 bytes in split mode).
+    /// Transfer exceeds pool buffer (max 16 bytes per phase).
     BufferOverflow,
 }
 
@@ -372,19 +347,21 @@ impl embedded_hal::i2c::ErrorType for I2cBus {
 
 impl I2c for I2cBus {
     async fn read(&mut self, address: u8, read: &mut [u8]) -> Result<(), I2cError> {
-        if read.len() > POOL_MAX_BYTES {
+        if read.len() > POOL_MAX {
             return Err(I2cError::BufferOverflow);
         }
-        // Current implementation uses blocking poll internally.
-        // Async waker support can be added once interrupt routing is validated.
-        self.blocking_read_inner(address, read)
+        self.start_read(address, read.len());
+        WaitDoneFuture2 { ch: self.ch }.await?;
+        self.read_pool_result(read);
+        Ok(())
     }
 
     async fn write(&mut self, address: u8, write: &[u8]) -> Result<(), I2cError> {
-        if write.len() > POOL_MAX_BYTES {
+        if write.len() > POOL_MAX {
             return Err(I2cError::BufferOverflow);
         }
-        self.blocking_write_inner(address, write)
+        self.start_write(address, write);
+        WaitDoneFuture2 { ch: self.ch }.await
     }
 
     async fn write_read(
@@ -393,13 +370,15 @@ impl I2c for I2cBus {
         write: &[u8],
         read: &mut [u8],
     ) -> Result<(), I2cError> {
-        if write.len() > POOL_MAX_BYTES || read.len() > POOL_MAX_BYTES {
+        if write.len() > POOL_MAX || read.len() > POOL_MAX {
             return Err(I2cError::BufferOverflow);
         }
-        // Write phase (send address + data, no stop).
-        self.blocking_write_inner(address, write)?;
-        // Read phase (repeated start).
-        self.blocking_read_inner(address, read)
+        self.start_write(address, write);
+        WaitDoneFuture2 { ch: self.ch }.await?;
+        self.start_read(address, read.len());
+        WaitDoneFuture2 { ch: self.ch }.await?;
+        self.read_pool_result(read);
+        Ok(())
     }
 
     async fn transaction(
@@ -409,22 +388,76 @@ impl I2c for I2cBus {
     ) -> Result<(), I2cError> {
         for op in operations.iter_mut() {
             match op {
-                Operation::Read(buf) => self.blocking_read_inner(address, buf)?,
-                Operation::Write(buf) => self.blocking_write_inner(address, buf)?,
+                Operation::Read(buf) => {
+                    if buf.len() > POOL_MAX {
+                        return Err(I2cError::BufferOverflow);
+                    }
+                    self.start_read(address, buf.len());
+                    WaitDoneFuture2 { ch: self.ch }.await?;
+                    self.read_pool_result(buf);
+                }
+                Operation::Write(buf) => {
+                    if buf.len() > POOL_MAX {
+                        return Err(I2cError::BufferOverflow);
+                    }
+                    self.start_write(address, buf);
+                    WaitDoneFuture2 { ch: self.ch }.await?;
+                }
             }
         }
         Ok(())
     }
 }
 
-// ── Address helpers ───────────────────────────────────────────────────────────
+// ── Channel dispatch helpers ──────────────────────────────────────────────────
+// Maps channel index to the correct `pac::I2CX` constant.
+// The PAC exposes 14 separate typed instances rather than an array.
 
-fn global_base() -> *mut u32 {
-    I2C_GLOBAL_BASE as *mut u32
+fn with_ch<F>(ch: u8, f: F)
+where
+    F: FnOnce(pac::i2c_v1::I2C),
+{
+    match ch {
+        0 => f(pac::I2C0),
+        1 => f(pac::I2C1),
+        2 => f(pac::I2C2),
+        3 => f(pac::I2C3),
+        4 => f(pac::I2C4),
+        5 => f(pac::I2C5),
+        6 => f(pac::I2C6),
+        7 => f(pac::I2C7),
+        8 => f(pac::I2C8),
+        9 => f(pac::I2C9),
+        10 => f(pac::I2C10),
+        11 => f(pac::I2C11),
+        12 => f(pac::I2C12),
+        13 => f(pac::I2C13),
+        _ => {}
+    }
 }
 
-fn ch_base(ch: u8) -> *mut u32 {
-    (I2C_CH_BASE + ch as usize * I2C_CH_STRIDE) as *mut u32
+fn with_ch_result<F, T>(ch: u8, f: F) -> T
+where
+    F: FnOnce(pac::i2c_v1::I2C) -> T,
+    T: Default,
+{
+    match ch {
+        0 => f(pac::I2C0),
+        1 => f(pac::I2C1),
+        2 => f(pac::I2C2),
+        3 => f(pac::I2C3),
+        4 => f(pac::I2C4),
+        5 => f(pac::I2C5),
+        6 => f(pac::I2C6),
+        7 => f(pac::I2C7),
+        8 => f(pac::I2C8),
+        9 => f(pac::I2C9),
+        10 => f(pac::I2C10),
+        11 => f(pac::I2C11),
+        12 => f(pac::I2C12),
+        13 => f(pac::I2C13),
+        _ => T::default(),
+    }
 }
 
 // ── Interrupt handlers ────────────────────────────────────────────────────────

@@ -12,6 +12,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aspeed-mmio"
+version = "0.1.0"
+dependencies = [
+ "defmt 0.3.100",
+ "embassy-time",
+]
+
+[[package]]
 name = "aspeed-pac"
 version = "0.1.0"
 dependencies = [
@@ -216,6 +224,7 @@ dependencies = [
 name = "embassy-aspeed"
 version = "0.1.0"
 dependencies = [
+ "aspeed-mmio",
  "aspeed-pac",
  "cortex-m",
  "cortex-m-rt",
@@ -232,6 +241,7 @@ dependencies = [
  "embedded-hal-async",
  "embedded-io 0.6.1",
  "embedded-io-async 0.6.1",
+ "lz4_flex",
  "panic-halt",
  "riscv 0.11.1",
  "riscv-rt",
@@ -478,6 +488,12 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
 ]
+
+[[package]]
+name = "lz4_flex"
+version = "0.11.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "373f5eceeeab7925e0c1098212f2fbc4d416adec9d35051a6ab251e824c1854a"
 
 [[package]]
 name = "matchers"

@@ -10,15 +10,18 @@
 //! | 2 | SSP |
 //! | 3 | TSP |
 //!
-//! Each sub-channel supports 4 message IDs (0–3).  Each message ID carries
+//! Each sub-channel supports 4 message IDs (0-3).  Each message ID carries
 //! a 32-byte payload.  Messages are triggered by writing to the TRIG register
 //! and acknowledged by writing 1 to the STATUS register.
 //!
-//! # Polling-only
+//! # Sync and async
 //!
-//! The BootMCU IPC1 has no IRQ line; all operations are polling.  Zephyr's
-//! `ipm_bootmcu.c` driver uses a thread with `k_msleep(1)`.  Our driver
-//! provides blocking `send` and `recv` that busy-wait on STATUS.
+//! The BootMCU IPC1 has no IRQ line; all operations are polling.
+//! Both sync (blocking) and async (yielding) APIs are provided:
+//!
+//! - `send()` / `send_async()` — write payload and trigger remote
+//! - `try_recv()` — non-blocking check (same for both modes)
+//! - `recv()` / `recv_async()` — wait for a message
 //!
 //! # Memory layout
 //!
@@ -33,15 +36,13 @@
 //!   +0x00  TRIG    trigger (write BIT(id) to send)
 //!   +0x04  ENABLE  per-ID receive enable mask
 //!   +0x08  STATUS  pending IDs (write-1-clear)
-//!   +0x10  DATA0   32-byte payload for ID 0  (8 × u32)
+//!   +0x10  DATA0   32-byte payload for ID 0  (8 x u32)
 //!   +0x30  DATA1   32-byte payload for ID 1
 //!   +0x50  DATA2   32-byte payload for ID 2
 //!   +0x70  DATA3   32-byte payload for ID 3
 //! ```
-//!
-//! Source: Zephyr `drivers/ipm/ipm_bootmcu.c`
 
-use core::ptr;
+use aspeed_mmio::MmioBlock;
 
 // ── Register layout ───────────────────────────────────────────────────────────
 
@@ -65,89 +66,131 @@ pub type Payload = [u8; 32];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Return the base address for a sub-channel.
 #[inline]
-fn subchan_base(channel: u8) -> usize {
-    IPC1_BASE + (channel as usize) * SUBCHAN_SIZE
+fn subchan_rx(channel: u8) -> MmioBlock {
+    unsafe { MmioBlock::new(IPC1_BASE + (channel as usize) * SUBCHAN_SIZE + RX_OFFSET) }
 }
 
 #[inline]
-fn read_reg(half_base: usize, off: usize) -> u32 {
-    unsafe { ptr::read_volatile((half_base + off) as *const u32) }
+fn subchan_tx(channel: u8) -> MmioBlock {
+    unsafe { MmioBlock::new(IPC1_BASE + (channel as usize) * SUBCHAN_SIZE + TX_OFFSET) }
 }
 
-#[inline]
-fn write_reg(half_base: usize, off: usize, val: u32) {
-    unsafe { ptr::write_volatile((half_base + off) as *mut u32, val) }
+fn write_payload(tx: &mut MmioBlock, id: u8, payload: &Payload) {
+    let data_off = DATA_OFFSETS[id as usize];
+    for (i, chunk) in payload.chunks_exact(4).enumerate() {
+        let word = u32::from_le_bytes(chunk.try_into().unwrap());
+        tx.write32(data_off + i * 4, word);
+    }
+}
+
+fn read_payload(rx: &MmioBlock, id: u8) -> Payload {
+    let data_off = DATA_OFFSETS[id as usize];
+    let mut payload = [0u8; 32];
+    for (i, chunk) in payload.chunks_exact_mut(4).enumerate() {
+        let word = rx.read32(data_off + i * 4);
+        chunk.copy_from_slice(&word.to_le_bytes());
+    }
+    payload
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/// IPC1 driver handle (zero-size — all state is in MMIO registers).
-pub struct Ipc1;
+/// IPC1 driver handle.
+///
+/// Uses `MmioBlock` for safe volatile register access (derive-mmio pattern).
+/// Holds `&mut self` for write operations to enforce exclusive access through
+/// the borrow checker.
+pub struct Ipc1 {
+    _private: (),
+}
 
 impl Ipc1 {
     /// Create an IPC1 driver handle and enable all RX IDs on every sub-channel.
     pub fn new() -> Self {
         for ch in 0..4u8 {
-            let rx_base = subchan_base(ch) + RX_OFFSET;
-            write_reg(rx_base, IPCR_ENABLE, 0xF); // enable IDs 0–3
-            write_reg(rx_base, IPCR_STATUS, 0xF); // clear any stale status
+            let mut rx = subchan_rx(ch);
+            rx.write32(IPCR_ENABLE, 0xF);
+            rx.write32(IPCR_STATUS, 0xF);
         }
-        Self
+        Self { _private: () }
     }
+
+    // ── Sync API ──────────────────────────────────────────────────────────
 
     /// Blocking send: write `payload` to `id` on `channel` and trigger the remote.
     ///
     /// Busy-waits until a previous message with the same ID has been acknowledged.
     ///
     /// - `channel`: 0=secure-CA35, 1=non-secure-CA35, 2=SSP, 3=TSP
-    /// - `id`: message ID 0–3
-    pub fn send(&self, channel: u8, id: u8, payload: &Payload) {
-        let tx_base = subchan_base(channel) + TX_OFFSET;
-        // Wait until previous message with this ID has been consumed.
-        while read_reg(tx_base, IPCR_STATUS) & (1 << id) != 0 {
+    /// - `id`: message ID 0-3
+    pub fn send(&mut self, channel: u8, id: u8, payload: &Payload) {
+        let mut tx = subchan_tx(channel);
+        while tx.read32(IPCR_STATUS) & (1 << id) != 0 {
             core::hint::spin_loop();
         }
-        // Write payload as u32 words.
-        let data_off = DATA_OFFSETS[id as usize];
-        for (i, chunk) in payload.chunks_exact(4).enumerate() {
-            let word = u32::from_le_bytes(chunk.try_into().unwrap());
-            write_reg(tx_base, data_off + i * 4, word);
-        }
-        // Trigger the remote.
-        write_reg(tx_base, IPCR_TRIG, 1 << id);
+        write_payload(&mut tx, id, payload);
+        tx.write32(IPCR_TRIG, 1 << id);
     }
 
     /// Non-blocking receive check.
     ///
     /// Returns `Some((id, payload))` if any message is pending on `channel`,
     /// or `None` if the RX FIFO is empty.  Clears the STATUS bit on receipt.
-    pub fn try_recv(&self, channel: u8) -> Option<(u8, Payload)> {
-        let rx_base = subchan_base(channel) + RX_OFFSET;
-        let status = read_reg(rx_base, IPCR_STATUS);
+    pub fn try_recv(&mut self, channel: u8) -> Option<(u8, Payload)> {
+        let rx = subchan_rx(channel);
+        let status = rx.read32(IPCR_STATUS);
         if status == 0 {
             return None;
         }
-        let id = status.trailing_zeros() as u8; // lowest pending ID
-        let data_off = DATA_OFFSETS[id as usize];
-        let mut payload = [0u8; 32];
-        for (i, chunk) in payload.chunks_exact_mut(4).enumerate() {
-            let word = read_reg(rx_base, data_off + i * 4);
-            chunk.copy_from_slice(&word.to_le_bytes());
-        }
-        // Acknowledge (write-1-clear).
-        write_reg(rx_base, IPCR_STATUS, 1 << id);
+        let id = status.trailing_zeros() as u8;
+        let payload = read_payload(&rx, id);
+        let mut rx = subchan_rx(channel);
+        rx.write32(IPCR_STATUS, 1 << id);
         Some((id, payload))
     }
 
     /// Blocking receive: busy-wait until a message arrives on `channel`.
-    pub fn recv(&self, channel: u8) -> (u8, Payload) {
+    pub fn recv(&mut self, channel: u8) -> (u8, Payload) {
         loop {
             if let Some(msg) = self.try_recv(channel) {
                 return msg;
             }
             core::hint::spin_loop();
+        }
+    }
+
+    // ── Async API ─────────────────────────────────────────────────────────
+
+    /// Async send: write `payload` to `id` on `channel` and trigger the remote.
+    ///
+    /// Yields to the executor while waiting for a previous message to be
+    /// acknowledged, instead of busy-waiting.
+    #[cfg(feature = "ast2700-bootmcu")]
+    pub async fn send_async(&mut self, channel: u8, id: u8, payload: &Payload) {
+        let mut tx = subchan_tx(channel);
+        let _ = aspeed_mmio::poll_until_async(
+            || tx.read32(IPCR_STATUS),
+            |s| s & (1 << id) == 0,
+            embassy_time::Duration::from_micros(100),
+            embassy_time::Duration::from_secs(5),
+        )
+        .await;
+        write_payload(&mut tx, id, payload);
+        tx.write32(IPCR_TRIG, 1 << id);
+    }
+
+    /// Async receive: yield to the executor while waiting for a message.
+    ///
+    /// Polls the RX status register at 100us intervals, yielding between
+    /// polls to allow other Embassy tasks to run.
+    #[cfg(feature = "ast2700-bootmcu")]
+    pub async fn recv_async(&mut self, channel: u8) -> (u8, Payload) {
+        loop {
+            if let Some(msg) = self.try_recv(channel) {
+                return msg;
+            }
+            embassy_time::Timer::after(embassy_time::Duration::from_micros(100)).await;
         }
     }
 }

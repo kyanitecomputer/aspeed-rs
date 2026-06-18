@@ -2,7 +2,7 @@
 //!
 //! # Pin numbering
 //!
-//! Pins are numbered continuously (0-based), matching the Zephyr convention:
+//! Pins are numbered continuously (0-based):
 //! - Port A pin 0 = pin 0, …, Port A pin 7 = pin 7
 //! - Port B pin 0 = pin 8, …
 //!
@@ -36,9 +36,9 @@
 
 use core::future::Future;
 use core::pin::Pin as PinFut;
-use core::ptr;
 use core::task::{Context, Poll};
 
+use aspeed_mmio::MmioBlock;
 use embassy_sync::waitqueue::AtomicWaker;
 
 use embedded_hal::digital::{ErrorType, InputPin, OutputPin, StatefulOutputPin};
@@ -66,20 +66,15 @@ const IDX_REG_WORD: usize = 0x2AC / 4;
 const CMD_SRC_SEL_WORD: usize = 0x2D0 / 4;
 
 #[inline(always)]
-fn gpio_base() -> *mut u32 {
-    GPIO_BASE as *mut u32
-}
-
-#[inline(always)]
 fn gpio_rr(word_off: usize) -> u32 {
-    // SAFETY: GPIO MMIO read.
-    unsafe { ptr::read_volatile(gpio_base().add(word_off)) }
+    let regs = unsafe { MmioBlock::new(GPIO_BASE) };
+    regs.read32(word_off * 4)
 }
 
 #[inline(always)]
 fn gpio_rw(word_off: usize, val: u32) {
-    // SAFETY: GPIO MMIO write.
-    unsafe { ptr::write_volatile(gpio_base().add(word_off), val) }
+    let mut regs = unsafe { MmioBlock::new(GPIO_BASE) };
+    regs.write32(word_off * 4, val)
 }
 
 fn index_write(pin_num: u8, idx_type: u32, idx_data: u32) {
@@ -104,7 +99,7 @@ struct GroupRegs {
     data_read: usize,
 }
 
-/// Register offsets for each GPIO group (from Zephyr gpio_aspeed.h).
+/// Register offsets for each GPIO group.
 static GROUPS: [GroupRegs; 7] = [
     // Group 0: A/B/C/D
     GroupRegs {

@@ -5,6 +5,8 @@
 //!
 //! Base address: `0x7E61_0000` (AST2600 CM3 view).
 //!
+//! Register access uses `MmioBlock` for safe volatile read/write access.
+//!
 //! # PWM
 //!
 //! Up to 16 independent PWM outputs (CH0–15), each configurable with:
@@ -37,7 +39,7 @@
 //! let rpm = tach.read_rpm(200_000_000, 2);
 //! ```
 
-use core::ptr;
+use aspeed_mmio::MmioBlock;
 
 // ── Base address ──────────────────────────────────────────────────────────────
 
@@ -55,42 +57,27 @@ const TACH_STS_OFF: usize = 0x0C;
 // ── PWM_CTRL bit fields ───────────────────────────────────────────────────────
 
 const PWM_CLK_DIV_L_MASK: u32 = 0xFF;
-const PWM_CLK_DIV_H_SHIFT: u32 = 8;
 const PWM_CLK_DIV_H_MASK: u32 = 0xF << 8;
 const PWM_PIN_EN: u32 = 1 << 12;
-const PWM_OPEN_DRAIN: u32 = 1 << 13;
 const PWM_INVERSE: u32 = 1 << 14;
-const PWM_LEVEL_OUT: u32 = 1 << 15;
 const PWM_CLK_EN: u32 = 1 << 16;
-const PWM_DUTY_SYNC_DIS: u32 = 1 << 17;
-const PWM_DUTY_LOAD_WDT_EN: u32 = 1 << 18;
-const PWM_LOAD_SEL_RISING_WDT: u32 = 1 << 19;
 
 // ── PWM_DUTY bit fields ───────────────────────────────────────────────────────
 
-const PWM_RISING_MASK: u32 = 0xFF;
 const PWM_FALLING_SHIFT: u32 = 8;
-const PWM_WDT_SHIFT: u32 = 16;
 const PWM_PERIOD_SHIFT: u32 = 24;
 const PWM_PERIOD_MAX: u32 = 0xFF;
 
 // ── TACH_CTRL bit fields ──────────────────────────────────────────────────────
 
 const TACH_THRESHOLD_MASK: u32 = 0xF_FFFF;
-const TACH_CLK_DIV_T_SHIFT: u32 = 20;
-const TACH_CLK_DIV_T_MASK: u32 = 0xF << 20;
 const TACH_IO_EDGE_SHIFT: u32 = 24;
-const TACH_IO_EDGE_MASK: u32 = 3 << 24;
-const TACH_DEBOUNCE_SHIFT: u32 = 26;
 const TACH_ENABLE: u32 = 1 << 28;
-const TACH_LOOPBACK: u32 = 1 << 29;
-const TACH_IER: u32 = 1 << 31;
 
 // ── TACH_STS bit fields ───────────────────────────────────────────────────────
 
 const TACH_VALUE_MASK: u32 = 0xF_FFFF;
 const TACH_FULL_MEAS: u32 = 1 << 20;
-const TACH_VALUE_UPDATE: u32 = 1 << 21;
 const TACH_ISR: u32 = 1 << 31; // RW1C
 
 // ── Error type ────────────────────────────────────────────────────────────────
@@ -157,20 +144,18 @@ impl PwmChannel {
     /// After this call, use [`set_duty_percent`] to change the duty cycle.
     /// Call [`enable`] to start the output.
     pub fn set_frequency_hz(&self, target_hz: u32, input_clk_hz: u32) {
-        // period = (duty_period + 1) * (div_l + 1) / input_clk
-        // → (div_l + 1) = input_clk / (target_hz * (duty_period + 1))
         let duty_period = PWM_PERIOD_MAX;
         let divisor = input_clk_hz / (target_hz * (duty_period + 1));
         let div_l = divisor.saturating_sub(1).min(0xFF);
 
-        let ctrl = unsafe { ptr::read_volatile(self.ctrl()) };
-        let new_ctrl = (ctrl & !PWM_CLK_DIV_L_MASK & !PWM_CLK_DIV_H_MASK)
-            | (div_l & 0xFF);
-        unsafe { ptr::write_volatile(self.ctrl(), new_ctrl) };
-
-        // Set duty_period; rising = 0, falling = period+1 → 100% (set via set_duty_percent).
-        let duty_reg = (duty_period << PWM_PERIOD_SHIFT) | (0 << 0); // rising=0, falling=0→100%
-        unsafe { ptr::write_volatile(self.duty(), duty_reg) };
+        let regs = unsafe { MmioBlock::new(self.base) };
+        let ctrl = regs.read32(PWM_CTRL_OFF);
+        let mut regs = unsafe { MmioBlock::new(self.base) };
+        regs.write32(
+            PWM_CTRL_OFF,
+            (ctrl & !PWM_CLK_DIV_L_MASK & !PWM_CLK_DIV_H_MASK) | (div_l & 0xFF),
+        );
+        regs.write32(PWM_DUTY_OFF, duty_period << PWM_PERIOD_SHIFT);
     }
 
     /// Set duty cycle as a percentage (0–100).
@@ -181,71 +166,73 @@ impl PwmChannel {
     /// 0% → CLK_EN cleared (output inactive).
     /// 100% → falling = rising = 0 (always active when CLK_EN set).
     pub fn set_duty_percent(&self, percent: u8) {
-        let duty = unsafe { ptr::read_volatile(self.duty()) };
+        let regs = unsafe { MmioBlock::new(self.base) };
+        let duty = regs.read32(PWM_DUTY_OFF);
         let period = (duty >> PWM_PERIOD_SHIFT) as u8;
 
-        let falling = if percent == 0 {
+        let falling = if percent == 0 || percent >= 100 {
             0u8
-        } else if percent >= 100 {
-            0u8 // falling == rising == 0 → 100%
         } else {
             ((period as u32 + 1) * percent as u32 / 100) as u8
         };
 
-        let new_duty = (duty & 0xFF00_00FF) | ((falling as u32) << PWM_FALLING_SHIFT);
-        unsafe { ptr::write_volatile(self.duty(), new_duty) };
+        let mut regs = unsafe { MmioBlock::new(self.base) };
+        regs.write32(
+            PWM_DUTY_OFF,
+            (duty & 0xFF00_00FF) | ((falling as u32) << PWM_FALLING_SHIFT),
+        );
 
-        // Update CLK_EN: clear for 0%, set otherwise.
-        let ctrl = unsafe { ptr::read_volatile(self.ctrl()) };
-        let new_ctrl = if percent == 0 {
-            ctrl & !PWM_CLK_EN
-        } else {
-            ctrl | PWM_CLK_EN
-        };
-        unsafe { ptr::write_volatile(self.ctrl(), new_ctrl) };
+        let ctrl = regs.read32(PWM_CTRL_OFF);
+        regs.write32(
+            PWM_CTRL_OFF,
+            if percent == 0 {
+                ctrl & !PWM_CLK_EN
+            } else {
+                ctrl | PWM_CLK_EN
+            },
+        );
     }
 
     /// Set raw PWM control and duty registers directly.
     ///
     /// For advanced use when the helper functions are insufficient.
     pub fn set_raw(&self, ctrl: u32, duty: u32) {
-        unsafe {
-            ptr::write_volatile(self.ctrl(), ctrl);
-            ptr::write_volatile(self.duty(), duty);
-        }
+        let mut regs = unsafe { MmioBlock::new(self.base) };
+        regs.write32(PWM_CTRL_OFF, ctrl);
+        regs.write32(PWM_DUTY_OFF, duty);
     }
 
     /// Enable the PWM output pin (set PIN_EN and CLK_EN).
     pub fn enable(&self) {
-        let ctrl = unsafe { ptr::read_volatile(self.ctrl()) };
-        unsafe { ptr::write_volatile(self.ctrl(), ctrl | PWM_PIN_EN | PWM_CLK_EN) };
+        let regs = unsafe { MmioBlock::new(self.base) };
+        let ctrl = regs.read32(PWM_CTRL_OFF);
+        let mut regs = unsafe { MmioBlock::new(self.base) };
+        regs.write32(PWM_CTRL_OFF, ctrl | PWM_PIN_EN | PWM_CLK_EN);
     }
 
     /// Disable the PWM output pin (clear PIN_EN; duty counter keeps running).
     pub fn disable(&self) {
-        let ctrl = unsafe { ptr::read_volatile(self.ctrl()) };
-        unsafe { ptr::write_volatile(self.ctrl(), ctrl & !PWM_PIN_EN) };
+        let regs = unsafe { MmioBlock::new(self.base) };
+        let ctrl = regs.read32(PWM_CTRL_OFF);
+        let mut regs = unsafe { MmioBlock::new(self.base) };
+        regs.write32(PWM_CTRL_OFF, ctrl & !PWM_PIN_EN);
     }
 
     /// Set output polarity.
     ///
     /// `true` = active low (inverted).  `false` = active high (normal).
     pub fn set_inverted(&self, inverted: bool) {
-        let ctrl = unsafe { ptr::read_volatile(self.ctrl()) };
-        let new = if inverted {
-            ctrl | PWM_INVERSE
-        } else {
-            ctrl & !PWM_INVERSE
-        };
-        unsafe { ptr::write_volatile(self.ctrl(), new) };
-    }
-
-    fn ctrl(&self) -> *mut u32 {
-        (self.base + PWM_CTRL_OFF) as *mut u32
-    }
-
-    fn duty(&self) -> *mut u32 {
-        (self.base + PWM_DUTY_OFF) as *mut u32
+        let regs = unsafe { MmioBlock::new(self.base) };
+        let ctrl = regs.read32(PWM_CTRL_OFF);
+        let mut regs = unsafe { MmioBlock::new(self.base) };
+        regs.write32(
+            PWM_CTRL_OFF,
+            if inverted {
+                ctrl | PWM_INVERSE
+            } else {
+                ctrl & !PWM_INVERSE
+            },
+        );
     }
 }
 
@@ -280,13 +267,16 @@ impl TachChannel {
         let ctrl = (0x7_FFFF & TACH_THRESHOLD_MASK)
             | ((self.edge.encoding()) << TACH_IO_EDGE_SHIFT)
             | TACH_ENABLE;
-        unsafe { ptr::write_volatile(self.tach_ctrl(), ctrl) };
+        let mut regs = unsafe { MmioBlock::new(self.base) };
+        regs.write32(TACH_CTRL_OFF, ctrl);
     }
 
     /// Disable the tachometer channel.
     pub fn disable(&self) {
-        let ctrl = unsafe { ptr::read_volatile(self.tach_ctrl()) };
-        unsafe { ptr::write_volatile(self.tach_ctrl(), ctrl & !TACH_ENABLE) };
+        let regs = unsafe { MmioBlock::new(self.base) };
+        let ctrl = regs.read32(TACH_CTRL_OFF);
+        let mut regs = unsafe { MmioBlock::new(self.base) };
+        regs.write32(TACH_CTRL_OFF, ctrl & !TACH_ENABLE);
     }
 
     /// Set the fan-stopped threshold.
@@ -295,9 +285,13 @@ impl TachChannel {
     /// edges exceeds this value.  Use [`threshold_from_rpm`] to compute the
     /// value for a minimum RPM.
     pub fn set_threshold(&self, threshold: u32) {
-        let ctrl = unsafe { ptr::read_volatile(self.tach_ctrl()) };
-        let new = (ctrl & !TACH_THRESHOLD_MASK) | (threshold & TACH_THRESHOLD_MASK);
-        unsafe { ptr::write_volatile(self.tach_ctrl(), new) };
+        let regs = unsafe { MmioBlock::new(self.base) };
+        let ctrl = regs.read32(TACH_CTRL_OFF);
+        let mut regs = unsafe { MmioBlock::new(self.base) };
+        regs.write32(
+            TACH_CTRL_OFF,
+            (ctrl & !TACH_THRESHOLD_MASK) | (threshold & TACH_THRESHOLD_MASK),
+        );
     }
 
     /// Compute the threshold value for a minimum RPM (for fan-stopped detection).
@@ -306,8 +300,6 @@ impl TachChannel {
     /// `input_clk_hz` — input clock (typically HCLK = 200 MHz on AST2600 SSP).
     /// `ppr` — pulses per revolution of the fan (typically 2).
     pub fn threshold_from_rpm(min_rpm: u32, input_clk_hz: u32, ppr: u32) -> u32 {
-        // threshold = clk_hz * 60 / (min_rpm * ppr * 4^0)
-        // Using clk_div_t = 0 (divisor = 1)
         let val = input_clk_hz / (min_rpm / 60 * ppr);
         val.min(TACH_THRESHOLD_MASK)
     }
@@ -320,7 +312,8 @@ impl TachChannel {
     /// Returns `None` if no complete measurement is available yet
     /// (before the first edge pair after [`enable`]).
     pub fn read_count(&self) -> Option<u32> {
-        let sts = unsafe { ptr::read_volatile(self.tach_sts()) };
+        let regs = unsafe { MmioBlock::new(self.base) };
+        let sts = regs.read32(TACH_STS_OFF);
         if sts & TACH_FULL_MEAS == 0 {
             return None;
         }
@@ -356,15 +349,9 @@ impl TachChannel {
 
     /// Clear the tachometer interrupt status flag (RW1C).
     pub fn clear_interrupt(&self) {
-        let sts = unsafe { ptr::read_volatile(self.tach_sts()) };
-        unsafe { ptr::write_volatile(self.tach_sts(), sts | TACH_ISR) };
-    }
-
-    fn tach_ctrl(&self) -> *mut u32 {
-        (self.base + TACH_CTRL_OFF) as *mut u32
-    }
-
-    fn tach_sts(&self) -> *mut u32 {
-        (self.base + TACH_STS_OFF) as *mut u32
+        let regs = unsafe { MmioBlock::new(self.base) };
+        let sts = regs.read32(TACH_STS_OFF);
+        let mut regs = unsafe { MmioBlock::new(self.base) };
+        regs.write32(TACH_STS_OFF, sts | TACH_ISR);
     }
 }

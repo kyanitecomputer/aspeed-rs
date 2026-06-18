@@ -1,0 +1,16 @@
+[package]
+name        = "aspeed-mmio"
+version     = "0.1.0"
+edition     = "2021"
+description = "Safe MMIO primitives for ASPEED HAL: ownership, typed registers, sync/async polling"
+repository  = "https://github.com/kyanitecomputer/aspeed-rs"
+publish     = false
+
+[features]
+default = []
+defmt = ["dep:defmt"]
+async = ["dep:embassy-time"]
+
+[dependencies]
+defmt        = { version = "0.3", optional = true }
+embassy-time = { git = "https://github.com/embassy-rs/embassy", optional = true, features = ["tick-hz-1_000_000"] }

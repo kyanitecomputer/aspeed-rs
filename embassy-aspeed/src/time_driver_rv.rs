@@ -10,9 +10,11 @@
 //!
 //! # Design
 //!
-//! The 64-bit counter runs freely.  `schedule_wake` writes ALARM_L/H and
-//! enables the interrupt via CTRL[EN].  On each alarm the ISR drains the
-//! embassy queue and programs the next alarm.
+//! `init()` enables EN — the 64-bit counter runs freely from 0 for the
+//! entire lifetime of the firmware.  `schedule_wake` writes ALARM_L/H
+//! (which also clears INTR_STS).  On each alarm the ISR drains the
+//! embassy queue and programs the next alarm.  RESET_EN is explicitly
+//! cleared so the counter never wraps to 0 on alarm match.
 //!
 //! # 64-bit counter read
 //!
@@ -23,8 +25,7 @@
 //!
 //! # Sources
 //!
-//! Zephyr `drivers/timer/ast2700_bootmcu_timer.c`
-//! ROADMAP.md Task 41
+//! aspeed-data/data/registers/bootmcu_timer_v1.yaml (source of truth)
 
 use core::cell::RefCell;
 use core::task::Waker;
@@ -33,20 +34,14 @@ use critical_section::Mutex;
 use embassy_time_driver::Driver;
 use embassy_time_queue_utils::Queue;
 
-// ── Timer register base (BootMCU view) ────────────────────────────────────────
+use crate::pac;
 
-const TIMER_BASE: usize = 0x14C3_6000;
-
-const COUNT_L: *const u32 = (TIMER_BASE + 0x00) as *const u32;
-const COUNT_H: *const u32 = (TIMER_BASE + 0x04) as *const u32;
-const ALARM_L: *mut u32 = (TIMER_BASE + 0x08) as *mut u32;
-const ALARM_H: *mut u32 = (TIMER_BASE + 0x0C) as *mut u32;
-const CTRL: *mut u32 = (TIMER_BASE + 0x10) as *mut u32;
-const CTRL_CLR: *mut u32 = (TIMER_BASE + 0x14) as *mut u32;
-
-const EN: u32 = 1 << 0;
-const RESET_EN: u32 = 1 << 3;
-const COUNT_CLR: u32 = 1 << 4;
+// PAC accessor — source of truth: bootmcu_timer_v1.yaml
+// pac::TIMER = TIMER at 0x14C36000 (ast2700_bootmcu chip YAML)
+#[inline(always)]
+fn timer() -> pac::bootmcu_timer_v1::TIMER {
+    pac::TIMER
+}
 
 // ── Driver ────────────────────────────────────────────────────────────────────
 
@@ -55,61 +50,53 @@ struct BootMcuTimerDriver {
 }
 
 impl BootMcuTimerDriver {
-    /// Read the free-running 64-bit counter using the H/L/H pattern to avoid
-    /// a race on the 32-bit boundary.
+    /// Read the free-running 64-bit counter using the H/L/H pattern.
+    ///
+    /// On RV32 there is no single-instruction 64-bit read.  If COUNT_H
+    /// changes between the two H reads, a 32-bit rollover occurred and we
+    /// retry.  This branch fires at most once per 2^32 µs ≈ every 71 min.
+    /// Source of truth: bootmcu_timer_v1.yaml COUNT_L/COUNT_H (Read access).
     #[inline]
     fn read_count(&self) -> u64 {
-        // H/L/H pattern: if the high word changed between the two reads, a
-        // 32-bit rollover occurred during the window.  Retry until we get a
-        // consistent pair rather than returning a corrupted value.
         loop {
-            let h1 = unsafe { COUNT_H.read_volatile() };
-            let l = unsafe { COUNT_L.read_volatile() };
-            let h2 = unsafe { COUNT_H.read_volatile() };
+            let h1 = timer().COUNT_H().read();
+            let l = timer().COUNT_L().read();
+            let h2 = timer().COUNT_H().read();
             if h1 == h2 {
                 return ((h1 as u64) << 32) | (l as u64);
             }
-            // Rollover occurred between reads; the L value is stale.  Retry
-            // for a consistent H/L pair.  This branch is taken at most once
-            // per 2^32 µs ≈ every ~71 minutes.
         }
     }
 
-    /// Arm the alarm at `at` ticks and enable the interrupt.
-    /// Writing ALARM_L/H also clears INTR_STS.
+    /// Arm the alarm at `at` µs ticks.
+    ///
+    /// Counter runs freely (EN=1 set during init).  Writing ALARM also
+    /// clears CTRL.INTR_STS (bootmcu_timer_v1.yaml ALARM_L/H description).
+    /// Write high word first to avoid a transient 64-bit match.
     #[inline]
     fn set_alarm(&self, at: u64) {
-        unsafe {
-            // Disable interrupt while reprogramming.
-            CTRL_CLR.write_volatile(EN);
-            // Writing alarm clears INTR_STS.
-            ALARM_L.write_volatile(at as u32);
-            ALARM_H.write_volatile((at >> 32) as u32);
-            // Re-enable interrupt.
-            CTRL.write_volatile(EN);
-        }
+        timer().MATCH_H().write_value((at >> 32) as u32);
+        timer().MATCH_L().write_value(at as u32);
     }
 
     fn on_interrupt(&self) {
         critical_section::with(|cs| {
-            // Disable the alarm interrupt.
-            unsafe {
-                CTRL_CLR.write_volatile(EN);
-            }
-
             let now = self.read_count();
             let mut queue = self.queue.borrow(cs).borrow_mut();
 
-            // Wake all expired tasks and find the next scheduled wake.
             let mut next = queue.next_expiration(now);
             while next <= now {
                 next = queue.next_expiration(now);
             }
 
             if next != u64::MAX {
-                // Drop the borrow before calling set_alarm to avoid re-entrancy.
                 drop(queue);
                 self.set_alarm(next);
+            } else {
+                // No pending wakes — park alarm at MAX to silence future
+                // spurious interrupts.  Writing ALARM clears INTR_STS.
+                timer().MATCH_H().write_value(0xFFFF_FFFF);
+                timer().MATCH_L().write_value(0xFFFF_FFFF);
             }
         });
     }
@@ -154,14 +141,22 @@ extern "C" fn MachineTimer() {
 ///
 /// Called once from `embassy_aspeed::init()`.
 pub fn init() {
-    unsafe {
-        // Disable interrupt.
-        CTRL_CLR.write_volatile(EN);
-        // Set alarm to maximum to suppress spurious firings.
-        ALARM_L.write_volatile(0xFFFF_FFFF);
-        ALARM_H.write_volatile(0xFFFF_FFFF);
-        // Reset the counter and keep RESET_EN so INTR_STS clears correctly.
-        CTRL.write_volatile(COUNT_CLR | RESET_EN);
-        // Counter now runs freely; interrupt fires only when armed by schedule_wake.
-    }
+    // All register accesses via PAC (bootmcu_timer_v1.yaml).
+    // Disable timer — stops counter and interrupt.
+    timer().CTRL_CLR().write(|w| w.set_INTR_EN(true));
+
+    // Park alarm at MAX to suppress spurious firings.
+    // Writing MATCH_L/H also clears INTR_STS (bootmcu_timer_v1.yaml).
+    timer().MATCH_H().write_value(0xFFFF_FFFF);
+    timer().MATCH_L().write_value(0xFFFF_FFFF);
+
+    // Reset counter to 0 (COUNT_CLR is self-clearing per YAML).
+    timer().CTRL().write(|w| w.set_COUNT_CLR(true));
+
+    // Enable timer — counter starts from 0, runs freely at 1 MHz.
+    timer().CTRL().write(|w| w.set_INTR_EN(true));
+
+    // Enable machine timer interrupt (mie[7] = MTIE).
+    // ibex wires this timer to the RISC-V machine timer IRQ.
+    unsafe { riscv::register::mie::set_mtimer() };
 }

@@ -158,6 +158,14 @@ impl Manifest {
             .copied()
     }
 
+    /// Absolute XIP address of an image's first byte (container base + offset).
+    /// Lets the caller read a small in-image header (e.g. the CA35 boot header)
+    /// with 32-bit XIP reads before copying the payload.
+    pub fn image_addr(&self, identifier: u32) -> Result<usize, ManifestError> {
+        let img = self.find(identifier).ok_or(ManifestError::ImageNotFound)?;
+        Ok(self.bundle_base + img.offset as usize)
+    }
+
     /// Return a byte slice into the SPI XIP window for the given image identifier.
     pub fn image_slice(&self, identifier: u32) -> Result<&'static [u8], ManifestError> {
         let img = self.find(identifier).ok_or(ManifestError::ImageNotFound)?;

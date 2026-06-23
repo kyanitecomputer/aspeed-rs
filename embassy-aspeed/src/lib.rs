@@ -24,8 +24,9 @@
 //! - `ast2700-bootmcu` — ASPEED AST2700 BootMCU (RISC-V ibex RV32IMC)
 //!
 //! Optional:
-//! - `defmt` (default) — structured logging support
-//! - `defmt-uart` — AST2700 BootMCU defmt frames over UART12
+//! - `log-uart` — `log`-crate global logger over UART12 (AST2700 BootMCU)
+//! - `defmt` (being retired) — structured logging support
+//! - `defmt-uart` (being retired) — AST2700 BootMCU defmt frames over UART12
 
 #![no_std]
 
@@ -64,6 +65,8 @@ pub mod clock;
 pub mod cptra;
 #[cfg(all(feature = "ast2700-bootmcu", feature = "defmt-uart"))]
 pub mod defmt_uart;
+#[cfg(all(feature = "ast2700-bootmcu", feature = "log-uart"))]
+pub mod log_uart;
 #[cfg(feature = "ast2700-bootmcu")]
 pub mod display;
 #[cfg(feature = "ast2700-bootmcu")]

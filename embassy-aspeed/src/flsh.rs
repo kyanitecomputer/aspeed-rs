@@ -54,7 +54,6 @@ pub const MAX_IMAGES: usize = 32;
 pub const INFO_TABLE_OFFSET: usize = HEADER_SIZE + CKSUM_SIZE;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum FlshError {
     /// Header magic mismatch.
     BadMagic,
@@ -68,7 +67,6 @@ pub enum FlshError {
 
 /// A parsed image descriptor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ImageInfo {
     pub identifier: u32,
     /// Absolute byte offset from the container base.

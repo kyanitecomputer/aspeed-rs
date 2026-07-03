@@ -228,7 +228,6 @@ fn delay_us(us: u32) {
 // ── Error type ────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum SliError {
     /// Remote (CPU-die) did not signal ready within timeout.
     RemoteTimeout,
@@ -701,20 +700,17 @@ fn calibrate_sliv(is_ds: bool, is_k_rx: bool) {
 ///
 /// Call before any IO-die peripheral access that crosses the SLI.
 pub fn init_f() {
-    #[cfg(feature = "defmt")]
-    defmt::info!("SLI first-stage init start");
+    log::info!("SLI first-stage init start");
 
     // Already calibrated (e.g. warm reset)?
     if is_calibrated() {
-        #[cfg(feature = "defmt")]
-        defmt::warn!("SLI first-stage init skipped: already calibrated");
+        log::warn!("SLI first-stage init skipped: already calibrated");
         return;
     }
 
     // Skip-calibration flag set by a prior successful run?
     if rd(SCU1_SCRATCH31) & SCU1_SCRATCH31_SLI_SKIP_CALI != 0 {
-        #[cfg(feature = "defmt")]
-        defmt::warn!("SLI first-stage init skipped: skip flag set");
+        log::warn!("SLI first-stage init skipped: skip flag set");
         return;
     }
 
@@ -767,8 +763,7 @@ pub fn init_f() {
     sli_clear(SLI0_BASE + SLIH_OFF, SLI_CLEAR_BUS);
     wait_suspend(SLI0_BASE + SLIH_OFF);
 
-    #[cfg(feature = "defmt")]
-    defmt::info!("SLI first-stage init complete");
+    log::info!("SLI first-stage init complete");
 }
 
 /// "Remote" SLI init — runs on BootMCU after `init_f` signals SLI0_READY.
@@ -780,14 +775,12 @@ pub fn init_f() {
 /// CPU-die perspective. `init_r` finalises the link after `init_f` has
 /// calibrated the IO-die side.
 pub fn init_r() -> Result<(), SliError> {
-    #[cfg(feature = "defmt")]
-    defmt::info!("SLI remote init start");
+    log::info!("SLI remote init start");
 
     // Skip-cal already set: hotfix + return.
     if rd(SCU1_SCRATCH31) & SCU1_SCRATCH31_SLI_SKIP_CALI != 0 {
         mac_hotfix();
-        #[cfg(feature = "defmt")]
-        defmt::warn!("SLI remote init skipped: skip flag set");
+        log::warn!("SLI remote init skipped: skip flag set");
         return Ok(());
     }
 
@@ -804,8 +797,7 @@ pub fn init_r() -> Result<(), SliError> {
         }
     }
     if !ready {
-        #[cfg(feature = "defmt")]
-        defmt::error!("SLI remote init timeout waiting for SLI0 ready");
+        log::error!("SLI remote init timeout waiting for SLI0 ready");
         return Err(SliError::RemoteTimeout);
     }
 
@@ -846,8 +838,7 @@ pub fn init_r() -> Result<(), SliError> {
     // CONFIG_SLI_K_ON_CPU not set, so sweep IO-die RX pads.
     calibrate_sliv(true, true);
 
-    #[cfg(feature = "defmt")]
-    defmt::info!("SLI remote init complete");
+    log::info!("SLI remote init complete");
 
     Ok(())
 }

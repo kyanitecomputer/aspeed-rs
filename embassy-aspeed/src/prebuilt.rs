@@ -73,7 +73,6 @@ const MAX_ENTRIES: usize = 12;
 
 /// Known prebuilt entry types.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u32)]
 pub enum PrebuiltType {
     Ddr4TrainImem = 0x01,

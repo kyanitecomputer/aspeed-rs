@@ -111,8 +111,7 @@ fn dramc() -> MmioBlock {
 /// Must be called after ATF is copied to DRAM, before `release()`.
 pub fn set_rvbar(atf_load_addr: usize) {
     let rvbar = rvbar_from_load_addr(atf_load_addr);
-    #[cfg(feature = "defmt")]
-    defmt::info!("CA35 RVBAR set to 0x{:08x}", rvbar);
+    log::info!("CA35 RVBAR set to 0x{:08x}", rvbar);
     let mut scu = scu0();
     fence_ow();
     scu.write32(CA35_RVBAR0, rvbar);
@@ -235,8 +234,7 @@ fn mpu_init_region(
 /// - 4: share_2 — IPC SSP<->Linux (SSP_DATA RO, CA35 NS_RW)
 /// - 5: vb      — Video BIOS (E2M RO, E2M1 RO)
 pub fn enable_vendor_mpu_regions() {
-    #[cfg(feature = "defmt")]
-    defmt::info!("CA35 MPU region setup start");
+    log::info!("CA35 MPU region setup start");
 
     let mut mc = dramc();
 
@@ -253,8 +251,7 @@ pub fn enable_vendor_mpu_regions() {
     mpu_init_region(&mut mc, 5, 0x031B_B000, 0x031B_CFFF, 0x30,
         0xFFFF_FFFF, 0xFFFF_FFFF, 0xFFFF_FFEF, 0xFFFF_FFBF);
 
-    #[cfg(feature = "defmt")]
-    defmt::info!("CA35 MPU region setup complete");
+    log::info!("CA35 MPU region setup complete");
 }
 
 const PLDA1_BASE: usize = 0x12C1_5000;
@@ -265,14 +262,12 @@ const PLDA_PRESET0: usize = 0xB0;
 const PLDA_PRESET1: usize = 0xB4;
 
 pub fn init_pci_e2m() {
-    #[cfg(feature = "defmt")]
-    defmt::info!("PCI E2M init start");
+    log::info!("PCI E2M init start");
 
     let scu0 = pac::SCU0;
     let rst2 = scu0.RST_CTRL2().read();
     if !rst2.E2M0() && !rst2.E2M1() {
-        #[cfg(feature = "defmt")]
-        defmt::warn!("PCI E2M init skipped: E2M reset already clear");
+        log::warn!("PCI E2M init skipped: E2M reset already clear");
         return;
     }
 
@@ -301,16 +296,14 @@ pub fn init_pci_e2m() {
     let mut plda3 = unsafe { MmioBlock::new(PLDA3_BASE) };
     plda3.modify32(PLDA_MSI_CAP, |v| (v & !0xFF) | 0x01);
 
-    #[cfg(feature = "defmt")]
-    defmt::info!("PCI E2M init complete");
+    log::info!("PCI E2M init complete");
 }
 
 const UFS_BASE: usize = 0x12C0_8000;
 const UFS_PATH_AXI: usize = 0xE4;
 
 pub fn init_ufs_axi_path() {
-    #[cfg(feature = "defmt")]
-    defmt::info!("UFS AXI path init start");
+    log::info!("UFS AXI path init start");
 
     let scu0 = pac::SCU0;
     let ufs = pac::UFS;
@@ -342,14 +335,12 @@ pub fn init_ufs_axi_path() {
     }
     ufs_mmio.write32(UFS_PATH_AXI, 0);
 
-    #[cfg(feature = "defmt")]
-    defmt::info!("UFS AXI path init complete");
+    log::info!("UFS AXI path init complete");
 }
 
 /// Release additional fabric/display/storage gates that vendor SPL leaves active.
 pub fn init_vendor_runtime_fabric() {
-    #[cfg(feature = "defmt")]
-    defmt::info!("runtime fabric init start");
+    log::info!("runtime fabric init start");
 
     let mut scu = scu0();
 
@@ -360,15 +351,13 @@ pub fn init_vendor_runtime_fabric() {
     scu.write32(MODRST1_CLR, RST_EMMC | RST_DP | RST_DP_MCU);
     scu.write32(MODRST2_CLR, RST2_VLINK);
 
-    #[cfg(feature = "defmt")]
-    defmt::info!("runtime fabric init complete");
+    log::info!("runtime fabric init complete");
 }
 
 pub fn release_vlink_reset() {
     let mut scu = scu0();
     scu.write32(MODRST2_CLR, RST2_VLINK);
-    #[cfg(feature = "defmt")]
-    defmt::info!("VLINK reset released");
+    log::info!("VLINK reset released");
 }
 
 /// Release CA35 cores from reset.
@@ -384,8 +373,7 @@ pub fn release_vlink_reset() {
 /// 2. Clear secondary SMP entry points (EP1..3 = 0)
 /// 3. Write 1 to SCU0_CA35_REL
 pub fn release() {
-    #[cfg(feature = "defmt")]
-    defmt::info!("CA35 release start");
+    log::info!("CA35 release start");
 
     let mut scu = scu0();
     let mut ufs_mmio = unsafe { MmioBlock::new(UFS_BASE) };
@@ -395,8 +383,7 @@ pub fn release() {
     scu.write64(CPU_SMP_EP3, 0);
     scu.write32(CA35_REL, 1);
 
-    #[cfg(feature = "defmt")]
-    defmt::info!("CA35 release complete");
+    log::info!("CA35 release complete");
 }
 
 /// Full CA35 bringup: configure MPU, set RVBAR, release.

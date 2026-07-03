@@ -16328,7 +16328,6 @@ fn size_detect(is_ddr4: bool) {
 // ── Error type ────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum DramError {
     PhyInitTimeout,
     SelfRefTimeout,
@@ -16452,15 +16451,13 @@ fn run_training_pass(
 /// `dram_size`: must match installed hardware.
 ///   AST2750-A1 DCSCM = 2 GB DDR4 → `DramSize::GB2`.
 pub fn init() -> Result<(), DramError> {
-    #[cfg(feature = "defmt")]
-    defmt::info!("DRAM controller init start");
+    log::info!("DRAM controller init start");
 
     // Step 1: detect DDR type from hardware strap.
     use crate::pac::sdrammc_ast2700_v1::DdrType;
     let ddr_type = scu::ddr_type_strap();
     let is_ddr4 = matches!(ddr_type, DdrType::DDR4);
-    #[cfg(feature = "defmt")]
-    defmt::info!("DRAM strap type: {:?}", ddr_type);
+    log::info!("DRAM strap type: {:?}", ddr_type);
 
     // Step 2: parse the prebuilt table (ASTH on A1, FLSH container on A2).
     let table = PrebuiltTable::parse();
@@ -16499,10 +16496,7 @@ pub fn init() -> Result<(), DramError> {
     let mut init_ok = false;
     let mut saved = [0u32; 5];
     for retry in 0..TRAINING_ATTEMPTS {
-        #[cfg(not(feature = "defmt"))]
-        let _ = retry;
-        #[cfg(feature = "defmt")]
-        defmt::info!("DRAM training attempt {}", retry + 1);
+        log::info!("DRAM training attempt {}", retry + 1);
 
         // Step 4b: WDT-based DRAMC soft-reset.
         for i in 0..5 {
@@ -16608,15 +16602,13 @@ pub fn init() -> Result<(), DramError> {
         // Steps D/E/F/G/H: Run vendor training passes.
         if let Err(e) = run_training_pass(imem, dmem, is_ddr4, false) {
             last_err = e;
-            #[cfg(feature = "defmt")]
-            defmt::warn!("DRAM 1D training failed: {:?}", e);
+            log::warn!("DRAM 1D training failed: {:?}", e);
             continue; // retry
         }
         if is_ddr4 {
             if let Err(e) = run_training_pass(imem_2d, dmem_2d, is_ddr4, true) {
                 last_err = e;
-                #[cfg(feature = "defmt")]
-                defmt::warn!("DRAM 2D training failed: {:?}", e);
+                log::warn!("DRAM 2D training failed: {:?}", e);
                 continue; // retry
             }
         }
@@ -16646,8 +16638,7 @@ pub fn init() -> Result<(), DramError> {
         }
         if !dramc().INTR_STS().read().DDRPHY_INIT_DONE() {
             last_err = DramError::PhyInitTimeout;
-            #[cfg(feature = "defmt")]
-            defmt::warn!("DRAM PHY init timed out");
+            log::warn!("DRAM PHY init timed out");
             continue; // retry
         }
         // Clear interrupts.
@@ -16671,8 +16662,7 @@ pub fn init() -> Result<(), DramError> {
         }
         if !dramc().INTR_STS().read().SELF_REF_DONE() {
             last_err = DramError::SelfRefTimeout;
-            #[cfg(feature = "defmt")]
-            defmt::warn!("DRAM self-refresh exit timed out");
+            log::warn!("DRAM self-refresh exit timed out");
             continue; // retry
         }
         dramc().INTR_CLR().write(|w| w.set_SELF_REF_DONE(true));
@@ -16690,8 +16680,7 @@ pub fn init() -> Result<(), DramError> {
         // bistcfg = PMODE_CRC(3<<4) | BMODE_RW_SWITCH(3<<2) | ENABLE(1<<1) = 0x3E
         if run_bist_zephyr(0, 0x10000, 0x3E).is_err() {
             last_err = DramError::BistFail;
-            #[cfg(feature = "defmt")]
-            defmt::warn!("DRAM BIST failed");
+            log::warn!("DRAM BIST failed");
             continue; // retry from WDT reset
         }
 
@@ -16701,8 +16690,7 @@ pub fn init() -> Result<(), DramError> {
     } // end retry loop
 
     if !init_ok {
-        #[cfg(feature = "defmt")]
-        defmt::error!("DRAM controller init failed: {:?}", last_err);
+        log::error!("DRAM controller init failed: {:?}", last_err);
         return Err(last_err);
     }
 
@@ -16728,8 +16716,7 @@ pub fn init() -> Result<(), DramError> {
     // sdramc_set_flag(DRAMC_INIT_DONE).
     set_dramc_init_done_flag();
 
-    #[cfg(feature = "defmt")]
-    defmt::info!("DRAM controller init complete");
+    log::info!("DRAM controller init complete");
 
     Ok(())
 }

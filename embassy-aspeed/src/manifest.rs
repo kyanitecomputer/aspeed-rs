@@ -65,7 +65,6 @@ pub const TSP_LOAD_ADDR: usize = 0xAE00_0000;
 // ── Error type ────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ManifestError {
     /// CMAN header magic mismatch.
     BadMagic,

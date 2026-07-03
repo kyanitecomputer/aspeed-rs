@@ -8,7 +8,7 @@ publish     = false
 
 # ── Feature flags ──────────────────────────────────────────────────────────────
 [features]
-default = ["defmt"]
+default = []
 
 # Chip + core target. Exactly one must be enabled.
 ast2600-ssp = [
@@ -57,19 +57,9 @@ ast2700-bootmcu = [
 # are unaffected.
 lz4 = ["dep:lz4_flex"]
 
-defmt = [
-    "dep:defmt",
-    "aspeed-mmio/defmt",
-    "embassy-executor?/defmt",
-    "embassy-time?/defmt",
-    "embassy-sync/defmt",
-    "embassy-hal-internal?/defmt",
-]
-defmt-uart = ["defmt"]
-
 # `log`-crate global logger over UART12 (AST2700 BootMCU). The uniform logging
-# path going forward; defmt is being retired.
-log-uart = ["dep:log"]
+# path; the `log` crate itself is always available (see [dependencies]).
+log-uart = []
 
 # ── Dependencies ───────────────────────────────────────────────────────────────
 [dependencies]
@@ -95,8 +85,7 @@ riscv-rt = { version = "0.12", optional = true }
 # on target; the encoder is used only by host tests and is DCE'd from firmware.
 lz4_flex = { version = "0.11", default-features = false, features = ["safe-encode", "safe-decode"], optional = true }
 
-defmt = { workspace = true, optional = true }
-log   = { workspace = true, optional = true }
+log = { workspace = true }
 
 embedded-hal       = { workspace = true }
 embedded-hal-async = { workspace = true }
@@ -106,9 +95,7 @@ embedded-io-async  = { workspace = true }
 critical-section = { workspace = true }
 
 [target.'cfg(target_arch = "arm")'.dev-dependencies]
-defmt-rtt  = { workspace = true }
 panic-halt = "0.2"
 
 [target.'cfg(target_arch = "riscv32")'.dev-dependencies]
-defmt-rtt  = { workspace = true }
 panic-halt = "0.2"

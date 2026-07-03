@@ -137,7 +137,6 @@ pub const AUTH_FLAG_SKIP_STASH: u32 = 0x1;
 
 /// Where Caliptra sources the image bytes to hash for AUTHORIZE_AND_STASH.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u32)]
 pub enum ImageHashSource {
     /// The caller supplies the precomputed digest in `measurement`.
@@ -150,7 +149,6 @@ pub enum ImageHashSource {
 
 /// Verdict returned by AUTHORIZE_AND_STASH.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum AuthResult {
     /// Image authorized.
     Authorized,

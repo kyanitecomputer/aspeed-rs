@@ -26,7 +26,6 @@ use crate::pac::sdrammc_ast2700_v1::DdrType;
 
 /// AST2700 hardware revision.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum HwRev {
     /// A0 silicon (first production stepping).
     A0,
@@ -40,7 +39,6 @@ pub enum HwRev {
 
 /// AST2700 device variant.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum DeviceId {
     /// AST2750 (full AST2700 with security extensions).
     Ast2750,

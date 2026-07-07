@@ -202,16 +202,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "defmt-rtt"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6eca0aae8aa2cf8333200ecbd236274697bc0a394765c858b3d9372eb1abcfa"
-dependencies = [
- "critical-section",
- "defmt 0.3.100",
-]
-
-[[package]]
 name = "document-features"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -229,8 +219,6 @@ dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "critical-section",
- "defmt 0.3.100",
- "defmt-rtt",
  "embassy-executor",
  "embassy-hal-internal",
  "embassy-sync",
@@ -241,6 +229,7 @@ dependencies = [
  "embedded-hal-async",
  "embedded-io 0.6.1",
  "embedded-io-async 0.6.1",
+ "log",
  "lz4_flex",
  "panic-halt",
  "riscv 0.11.1",
@@ -255,7 +244,6 @@ dependencies = [
  "cordyceps",
  "cortex-m",
  "critical-section",
- "defmt 1.0.1",
  "document-features",
  "embassy-executor-macros",
  "embassy-executor-timer-queue",
@@ -282,7 +270,6 @@ name = "embassy-hal-internal"
 version = "0.5.0"
 source = "git+https://github.com/embassy-rs/embassy#6ccc6a733569018b73f6913b5d771fa70e424f78"
 dependencies = [
- "defmt 1.0.1",
  "num-traits",
 ]
 
@@ -293,7 +280,6 @@ source = "git+https://github.com/embassy-rs/embassy#6ccc6a733569018b73f6913b5d77
 dependencies = [
  "cfg-if",
  "critical-section",
- "defmt 1.0.1",
  "embedded-io-async 0.7.0",
  "futures-core",
  "futures-sink",
@@ -307,7 +293,6 @@ source = "git+https://github.com/embassy-rs/embassy#6ccc6a733569018b73f6913b5d77
 dependencies = [
  "cfg-if",
  "critical-section",
- "defmt 1.0.1",
  "document-features",
  "embassy-time-driver",
  "embedded-hal 0.2.7",

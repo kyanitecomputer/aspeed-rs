@@ -48,14 +48,7 @@ ast2700-bootmcu = [
     "dep:embassy-time-driver",
     "dep:embassy-time-queue-utils",
     "dep:embassy-hal-internal",
-    "lz4",
 ]
-
-# LZ4 block decompression for A2 payload loading. Pulls in lz4_flex (which links
-# `alloc` unconditionally), so any binary enabling this must supply a global
-# allocator. Kept optional so the cortex-m (ast1060/ast2600-ssp) no-alloc builds
-# are unaffected.
-lz4 = ["dep:lz4_flex"]
 
 # `log`-crate global logger over UART12 (AST2700 BootMCU). The uniform logging
 # path; the `log` crate itself is always available (see [dependencies]).
@@ -80,10 +73,6 @@ cortex-m-rt = { workspace = true, optional = true }
 
 riscv    = { version = "0.11", features = ["critical-section-single-hart"], optional = true }
 riscv-rt = { version = "0.12", optional = true }
-
-# Safe (no `unsafe`) LZ4 block decoder for A2 payload decompression. Decode-only
-# on target; the encoder is used only by host tests and is DCE'd from firmware.
-lz4_flex = { version = "0.11", default-features = false, features = ["safe-encode", "safe-decode"], optional = true }
 
 log = { workspace = true }
 

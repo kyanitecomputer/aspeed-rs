@@ -74,10 +74,6 @@ pub mod flsh;
 pub mod extrst;
 #[cfg(feature = "ast2700-bootmcu")]
 pub mod ipc1;
-// LZ4 payload decompression: pure logic (no MMIO), gated on the lz4 feature so
-// host tests can run it via `--features lz4` without a chip feature.
-#[cfg(feature = "lz4")]
-pub mod lz4;
 #[cfg(feature = "ast2700-bootmcu")]
 pub mod manifest;
 #[cfg(feature = "ast2700-bootmcu")]

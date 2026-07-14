@@ -285,8 +285,15 @@ pub const RAW_A35_PAYLOAD_FLASH_OFFSET: usize = 0x0080_0000; // 8 MB mark
 /// without a hardcoded offset that breaks when the payload size changes.
 pub const RAW_A35_HEADER_FLASH_OFFSET: usize = 0x007F_0000;
 
-/// Magic for [`RAW_A35_HEADER_FLASH_OFFSET`] (word 0).
+/// Magic for [`RAW_A35_HEADER_FLASH_OFFSET`] (word 0): payload stored verbatim.
 pub const RAW_A35_HEADER_MAGIC: u32 = 0xA35E_B007;
+
+/// Alternate magic (word 0) marking an m77rip-compressed payload. Same 16-byte
+/// header layout, but the bytes after the header are an m77rip stream and
+/// `payload_len` is the *uncompressed* length (used to validate the decode).
+/// The compressed length is `image_size - 16`. The BootMCU decompresses the
+/// stream from the XIP window into the DRAM load window.
+pub const RAW_A35_HEADER_M77_MAGIC: u32 = 0xA35E_4D37;
 
 /// Load a raw binary from a fixed SPI flash offset to a DRAM destination.
 ///

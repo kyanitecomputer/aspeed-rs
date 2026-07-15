@@ -56,14 +56,24 @@ impl log::Log for UartLogger {
     }
 }
 
-/// A minimal `core::fmt::Write` sink that blocking-writes bytes to UART12.
+/// A minimal `core::fmt::Write` sink that blocking-writes bytes to UART12,
+/// translating each `\n` into `\r\n` so serial terminals don't staircase.
 struct Uart;
+
+impl Uart {
+    fn put(&self, byte: u8) {
+        while !pac::UART12.LSR().read().THRE() {}
+        pac::UART12.RBR_THR().write(|w| w.set_DATA(byte));
+    }
+}
 
 impl Write for Uart {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         for &byte in s.as_bytes() {
-            while !pac::UART12.LSR().read().THRE() {}
-            pac::UART12.RBR_THR().write(|w| w.set_DATA(byte));
+            if byte == b'\n' {
+                self.put(b'\r');
+            }
+            self.put(byte);
         }
         Ok(())
     }

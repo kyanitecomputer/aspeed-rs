@@ -289,10 +289,12 @@ pub const RAW_A35_HEADER_FLASH_OFFSET: usize = 0x007F_0000;
 pub const RAW_A35_HEADER_MAGIC: u32 = 0xA35E_B007;
 
 /// Alternate magic (word 0) marking an m77rip-compressed payload. Same 16-byte
-/// header layout, but the bytes after the header are an m77rip stream and
-/// `payload_len` is the *uncompressed* length (used to validate the decode).
-/// The compressed length is `image_size - 16`. The BootMCU decompresses the
-/// stream from the XIP window into the DRAM load window.
+/// header layout, but the bytes after the header are an m77rip stream and word 2
+/// (`payload_len`) holds the *exact compressed length*, i.e. the number of bytes
+/// to feed the (strict) decoder. This must be exact: the FLSH container pads
+/// each image to a 4-byte boundary, so `image_size - 16` can be a few bytes
+/// longer than the stream and the decoder rejects trailing bytes. The BootMCU
+/// DMAs the stream into DRAM and decompresses it into the load window.
 pub const RAW_A35_HEADER_M77_MAGIC: u32 = 0xA35E_4D37;
 
 /// Load a raw binary from a fixed SPI flash offset to a DRAM destination.

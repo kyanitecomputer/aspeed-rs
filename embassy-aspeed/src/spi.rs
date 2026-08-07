@@ -92,11 +92,15 @@ pub fn ast2700_fmc_dma_read_sync(flash_offset: usize, dst: usize, len: usize) ->
     }
 
     let mut fmc = unsafe { MmioBlock::new(AST2700_FMC_BASE) };
-    let flash_addr = AST2700_SPI_WINDOW + flash_offset;
 
     fmc.write32(FMC_IRQ_CTRL, DMA_STATUS);
-    fmc.write32(FMC_DMA_FLASH_ADDR, (flash_addr as u32) >> 2);
-    fmc.write32(FMC_DMA_RAM_ADDR, (dst as u32) >> 2);
+    // The FMC DMA engine takes BYTE addresses: a flash-relative byte offset for
+    // the source and a byte physical DRAM address for the destination. A `>> 2`
+    // word-scaling (and folding in the XIP window base) is wrong — so scaled,
+    // the DMA transfers nothing. Byte addressing was confirmed on the identical
+    // AST2700 FMC IP from the CA35 side; see FMC_SPI_HANDOFF.md.
+    fmc.write32(FMC_DMA_FLASH_ADDR, flash_offset as u32);
+    fmc.write32(FMC_DMA_RAM_ADDR, dst as u32);
     fmc.write32(FMC_DMA_LEN, (len as u32).saturating_sub(1));
     fmc.write32(FMC_DMA_CTRL, 1);
 

@@ -2,6 +2,10 @@
 
 Async Rust HAL for ASPEED SoC coprocessors and standalone SoCs, built on the [Embassy](https://embassy.dev/) framework.
 
+Part of the [Kyanite](https://github.com/kyanitecomputer) stack.
+
+> **Status:** experimental — expect breaking changes.
+
 ```
 https://github.com/kyanitecomputer/aspeed-rs
 ```
@@ -75,3 +79,17 @@ async fn main(_spawner: Spawner) {
     uart.write_all(b"Hello from AST2600 SSP!\r\n").await.unwrap();
 }
 ```
+
+## Contributing
+
+See the org-wide [CONTRIBUTING guide](https://github.com/kyanitecomputer/.github/blob/main/CONTRIBUTING.md).
+Contributions are dual-licensed.
+
+## Security
+
+See the org-wide [SECURITY policy](https://github.com/kyanitecomputer/.github/blob/main/SECURITY.md).
+
+## License
+
+Dual-licensed under either of Apache-2.0 ([LICENSE-APACHE](LICENSE-APACHE)) or
+MIT ([LICENSE-MIT](LICENSE-MIT)) at your option.

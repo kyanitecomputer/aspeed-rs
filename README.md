@@ -6,10 +6,6 @@ Part of the [Kyanite](https://github.com/kyanitecomputer) stack.
 
 > **Status:** experimental — expect breaking changes.
 
-```
-https://github.com/kyanitecomputer/aspeed-rs
-```
-
 ## Supported chips
 
 | Feature flag | SoC | Core | Target triple | HAL status |

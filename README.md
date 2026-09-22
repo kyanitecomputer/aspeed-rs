@@ -57,9 +57,9 @@ dagger call ci --aspeed-data ../aspeed-data
 
 ## Using in firmware
 
-Firmware binaries (examples, applications) live in [`aspeed-mcu-runtime`](https://github.com/kyanitecomputer/aspeed-mcu-runtime). This crate is a library only — no `[[bin]]` entries.
+Firmware binaries (examples, applications) live in [`mcu-runtime`](https://github.com/kyanitecomputer/mcu-runtime). This crate is a library only — no `[[bin]]` entries.
 
-Quick start (from aspeed-mcu-runtime):
+Quick start (from mcu-runtime):
 
 ```rust
 #![no_std]

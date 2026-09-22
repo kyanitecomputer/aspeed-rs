@@ -37,6 +37,19 @@ pub enum HwRev {
     Unknown(u8),
 }
 
+impl HwRev {
+    /// Short name of the hardware stepping, as decoded from the chip-ID
+    /// register (`SCU0.SIL_REV.HW_REV`). Unknown steppings render as "A?".
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HwRev::A0 => "A0",
+            HwRev::A1 => "A1",
+            HwRev::A2 => "A2",
+            HwRev::Unknown(_) => "A?",
+        }
+    }
+}
+
 /// AST2700 device variant.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DeviceId {
@@ -48,6 +61,20 @@ pub enum DeviceId {
     Ast2720,
     /// Unknown device ID.
     Unknown(u8),
+}
+
+impl DeviceId {
+    /// Marketing part name, as decoded from the chip-ID register
+    /// (`SCU0.SIL_REV.DEVICE_ID`). Unrecognized IDs render as the generic
+    /// family name "AST27xx".
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DeviceId::Ast2750 => "AST2750",
+            DeviceId::Ast2700 => "AST2700",
+            DeviceId::Ast2720 => "AST2720",
+            DeviceId::Unknown(_) => "AST27xx",
+        }
+    }
 }
 
 /// Read the silicon revision from SCU0.

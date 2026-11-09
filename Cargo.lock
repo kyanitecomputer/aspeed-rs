@@ -12,6 +12,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aspeed-hal"
+version = "0.1.0"
+dependencies = [
+ "aspeed-mmio",
+ "aspeed-pac 0.1.0 (git+https://github.com/kyanitecomputer/aspeed-data?rev=f0a6500555d973689963bf608f14bae851393fa7)",
+]
+
+[[package]]
 name = "aspeed-mmio"
 version = "0.1.0"
 dependencies = [
@@ -26,6 +34,11 @@ dependencies = [
  "cortex-m",
  "riscv 0.12.1",
 ]
+
+[[package]]
+name = "aspeed-pac"
+version = "0.1.0"
+source = "git+https://github.com/kyanitecomputer/aspeed-data?rev=f0a6500555d973689963bf608f14bae851393fa7#f0a6500555d973689963bf608f14bae851393fa7"
 
 [[package]]
 name = "autocfg"
@@ -215,7 +228,7 @@ name = "embassy-aspeed"
 version = "0.1.0"
 dependencies = [
  "aspeed-mmio",
- "aspeed-pac",
+ "aspeed-pac 0.1.0",
  "cortex-m",
  "cortex-m-rt",
  "critical-section",

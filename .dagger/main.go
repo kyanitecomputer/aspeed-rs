@@ -114,7 +114,8 @@ func (m *AspeedRs) Clippy(
 	return err
 }
 
-// Test runs host-side unit tests (no chip feature, compiles for x86_64).
+// Test runs host-side unit tests for x86_64: embassy-aspeed without a chip
+// feature, aspeed-hal with its pure AST2500 logic.
 // Pass the aspeed-data sibling dir: --aspeed-data ../aspeed-data
 func (m *AspeedRs) Test(
 	ctx context.Context,
@@ -126,6 +127,11 @@ func (m *AspeedRs) Test(
 		WithExec([]string{
 			"cargo", "test", "-p", "embassy-aspeed",
 			"--lib",
+			"--target", "x86_64-unknown-linux-gnu",
+		}).
+		WithExec([]string{
+			"cargo", "test", "-p", "aspeed-hal",
+			"--features", "ast2500",
 			"--target", "x86_64-unknown-linux-gnu",
 		}).
 		Sync(ctx)

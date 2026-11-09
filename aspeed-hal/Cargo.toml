@@ -1,0 +1,17 @@
+[package]
+name        = "aspeed-hal"
+version     = "0.1.0"
+edition     = "2021"
+description = "Executor-free blocking drivers for ASPEED SoCs"
+repository  = "https://github.com/kyanitecomputer/aspeed-rs"
+publish     = false
+
+[features]
+default = []
+ast2500 = ["aspeed-pac/ast2500-arm"]
+
+[dependencies]
+aspeed-mmio = { path = "../aspeed-mmio" }
+# A git dependency, not a path: firmware outside this workspace (fstart)
+# pins the same aspeed-data revision so both resolve to one PAC.
+aspeed-pac  = { git = "https://github.com/kyanitecomputer/aspeed-data", rev = "f0a6500555d973689963bf608f14bae851393fa7", default-features = false }

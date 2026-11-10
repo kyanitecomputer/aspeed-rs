@@ -67,10 +67,11 @@ pub enum InitialReset {
 }
 
 /// Clear the AHB bus lock, then take the first SoC reset if the fast-reset
-/// flag is set. Diverges into the reset on the first pass of a cold boot.
+/// flag is set. Diverges into the reset on the first pass of a cold boot,
+/// calling `before_reset` first, e.g. to log it.
 ///
 /// Leaves the SCU unlocked.
-pub fn initial_reset() -> InitialReset {
+pub fn initial_reset(before_reset: impl FnOnce()) -> InitialReset {
     // SAFETY: fixed AST2500 AHB controller and FMC addresses.
     let mut ahbc = unsafe { MmioBlock::new(AHBC_BASE) };
     ahbc.write32(0x00, AHBC_UNLOCK_KEY);
@@ -95,6 +96,8 @@ pub fn initial_reset() -> InitialReset {
             .write_value(pac::wdt_ast2500_v1::WDT_RESET_MASK(RESET_MASK_NORMAL));
         return InitialReset::Completed;
     }
+
+    before_reset();
 
     // SAFETY: fixed AST2500 LPC/KCS/UART register window.
     let mut lpc = unsafe { MmioBlock::new(LPC_APB_BASE) };

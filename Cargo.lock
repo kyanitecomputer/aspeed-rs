@@ -16,7 +16,7 @@ name = "aspeed-hal"
 version = "0.1.0"
 dependencies = [
  "aspeed-mmio",
- "aspeed-pac 0.1.0 (git+https://github.com/kyanitecomputer/aspeed-data?rev=e2834759833ae2247ed0c7647460fd4507389ad3)",
+ "aspeed-pac 0.1.0 (git+https://github.com/kyanitecomputer/aspeed-data?rev=7ecc50d0fb5f346adb4a7c086b655dda7938f1a5)",
 ]
 
 [[package]]
@@ -38,7 +38,7 @@ dependencies = [
 [[package]]
 name = "aspeed-pac"
 version = "0.1.0"
-source = "git+https://github.com/kyanitecomputer/aspeed-data?rev=e2834759833ae2247ed0c7647460fd4507389ad3#e2834759833ae2247ed0c7647460fd4507389ad3"
+source = "git+https://github.com/kyanitecomputer/aspeed-data?rev=7ecc50d0fb5f346adb4a7c086b655dda7938f1a5#7ecc50d0fb5f346adb4a7c086b655dda7938f1a5"
 
 [[package]]
 name = "autocfg"

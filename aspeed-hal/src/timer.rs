@@ -1,4 +1,5 @@
-//! Microsecond delays from timer 3.
+//! Microsecond delays from timer 3 of the AST2400/AST2500 timer
+//! controller.
 
 use aspeed_pac as pac;
 

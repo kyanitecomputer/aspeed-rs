@@ -8,10 +8,11 @@ publish     = false
 
 [features]
 default = []
+ast2400 = ["aspeed-pac/ast2400-arm"]
 ast2500 = ["aspeed-pac/ast2500-arm"]
 
 [dependencies]
 aspeed-mmio = { path = "../aspeed-mmio" }
 # A git dependency, not a path: firmware outside this workspace (fstart)
 # pins the same aspeed-data revision so both resolve to one PAC.
-aspeed-pac  = { git = "https://github.com/kyanitecomputer/aspeed-data", rev = "e2834759833ae2247ed0c7647460fd4507389ad3", default-features = false }
+aspeed-pac  = { git = "https://github.com/kyanitecomputer/aspeed-data", rev = "7ecc50d0fb5f346adb4a7c086b655dda7938f1a5", default-features = false }

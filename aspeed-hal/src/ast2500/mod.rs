@@ -4,4 +4,4 @@ pub mod fmc;
 pub mod mac;
 pub mod reset;
 pub mod sdmc;
-pub mod timer;
+pub use crate::timer;

@@ -1,5 +1,6 @@
-//! Firmware SPI controller (FMC): CE0 read mode and read timing. The SoC
-//! modules supply the AHB clock.
+//! Firmware SPI controller (FMC) of the AST2400 and AST2500: CE0 read mode
+//! and read timing. Both share the CE control, DMA and read timing
+//! compensation registers; the SoC modules supply the AHB clock.
 //!
 //! After reset CE0 reads with the normal read command (03h) at HCLK/16.
 //! [`fast_read`] switches it to the dual output fast read (3Bh) at the
@@ -9,6 +10,9 @@
 //! found, so code executing in place from CE0 runs on throughout.
 
 use aspeed_pac as pac;
+#[cfg(feature = "ast2400")]
+use pac::fmc_ast2400_v1 as regs;
+#[cfg(feature = "ast2500")]
 use pac::fmc_ast2500_v1 as regs;
 
 /// CE0 control (FMC10) for the dual output fast read (3Bh) with one dummy

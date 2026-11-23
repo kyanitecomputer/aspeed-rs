@@ -12,3 +12,7 @@
 
 #[cfg(feature = "ast2500")]
 pub mod ast2500;
+#[cfg(feature = "ast2500")]
+pub mod fmc;
+#[cfg(feature = "ast2500")]
+pub mod timer;
